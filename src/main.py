@@ -16,10 +16,8 @@ ir_led1_pin = digitalio.DigitalInOut(board.D15)     # IR-led for sensor1
 ir_led1_pin.direction = digitalio.Direction.OUTPUT
 
 # pwm signal for IR-led pins
-ir_led0_pwm = pwmio.PWMOut(board.D14, frequency=38000, duty_cycle=50)
-ir_led1_pwm = pwmio.PWMOut(board.D15, frequency=38000, duty_cycle=50)
-
-
+ir_led0_pwm = pwmio.PWMOut(board.D14, frequency=38000, duty_cycle=32768)   # 50% duty cycle = 65535 / 2 = 32768
+ir_led1_pwm = pwmio.PWMOut(board.D15, frequency=38000, duty_cycle=32768)
 
 # create the spi bus
 spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI)
@@ -30,7 +28,7 @@ cs = digitalio.DigitalInOut(board.D8)
 # create the mcp object
 mcp = MCP.MCP3008(spi, cs)
 
-# create an analog input channels
+# create analog input channels
 ir_sensor0 = AnalogIn(mcp, MCP.P0)
 ir_sensor1 = AnalogIn(mcp, MCP.P1)
 
