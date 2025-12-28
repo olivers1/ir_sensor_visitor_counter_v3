@@ -6,109 +6,140 @@ import board
 import adafruit_mcp3xxx.mcp3008 as MCP
 from adafruit_mcp3xxx.analog_in import AnalogIn
 import pwmio
-import numpy
+from enum import Enum
+import numpy as np
 
-# IO-pin setup
-ir_led0_pin = digitalio.DigitalInOut(board.D14)     # IR-led for sensor0
-ir_led0_pin.direction = digitalio.Direction.OUTPUT
 
-ir_led1_pin = digitalio.DigitalInOut(board.D15)     # IR-led for sensor1
-ir_led1_pin.direction = digitalio.Direction.OUTPUT
-
-# pwm signal for IR-led pins
+# IO-pin setup for IR-leds with pwm output signal
 ir_led0_pwm = pwmio.PWMOut(board.D14, frequency=38000, duty_cycle=32768)   # 50% duty cycle = 65535 / 2 = 32768
 ir_led1_pwm = pwmio.PWMOut(board.D15, frequency=38000, duty_cycle=32768)
 
-# create the spi bus
-spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI)
-
-# create the cs (chip select)
-cs = digitalio.DigitalInOut(board.D8)
-
-# create the mcp object
-mcp = MCP.MCP3008(spi, cs)
-
-# create analog input channels
-ir_sensor0 = AnalogIn(mcp, MCP.P0)
-ir_sensor1 = AnalogIn(mcp, MCP.P1)
-
-while(True):
-    print("sensor0")
-    print('Raw ADC Value: ', ir_sensor0.value)
-    print('ADC Voltage: ' + str(ir_sensor0.voltage) + 'V')
-
-    print("sensor1")
-    print('Raw ADC Value: ', ir_sensor1.value)
-    print('ADC Voltage: ' + str(ir_sensor1.voltage) + 'V')
-
-    time.sleep(0.5)
+# SPI setup
+spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI)  # create the spi bus
+cs = digitalio.DigitalInOut(board.D8)   # create the cs (chip select)
+mcp = MCP.MCP3008(spi, cs)  # create the mcp object
 
 
+class SensorTrigState(Enum):
+    NO_TRIG = 0
+    TRIG = 1
+    UNKNOWN = 2
 
-"""
-last_read = 0       # this keeps track of the last potentiometer value
-tolerance = 250     # to keep from being jittery we'll only change
-                    # volume when the pot has moved a significant amount
-                    # on a 16-bit ADC
 
-def remap_range(value, left_min, left_max, right_min, right_max):
-    # this remaps a value from original (left) range to new (right) range
-    # Figure out how 'wide' each range is
-    left_span = left_max - left_min
-    right_span = right_max - right_min
+class SensorSample:
+    def __init__(self):
+        self.value: int = 0
+        self.timestamp: int = 0
+        self.trig_state = SensorTrigState.UNKNOWN
+        
+    def set_sample(self, value, timestamp, trig_state):
+        self.value = value
+        self.timestamp = timestamp
+        self.trig_state = trig_state
+    
+    def get_sample(self):
+        return self.value, self.timestamp, self.trig_state
 
-    # Convert the left range into a 0-1 range (int)
-    valueScaled = int(value - left_min) / int(left_span)
 
-    # Convert the 0-1 range into a value in the right range.
-    return int(right_min + (valueScaled * right_span))
+class IrSensor:
+    def __init__(self, mcp_channel :int, sensor_trig_threshold: int):
+        self.mcp_channel = mcp_channel
+        self.sensor_trig_threshold = sensor_trig_threshold
+        
+    def get_sensor_data(self):
+        # read sensor value and timestamp
+        sensor_read = AnalogIn(mcp, self.mcp_channel)
+        value = sensor_read.value
+        timestamp = round(time.time()*1000)
+        
+        # evalute readout value to determine if sensor was trigged (blocked)
+        trig_state = SensorTrigState.NO_TRIG
+        if(value < self.sensor_trig_threshold):   # detect sensor trig. below threshold == trig, above threshold = no trig
+            trig_state = SensorTrigState.TRIG    # trig detected
+        else:
+            trig_state = SensorTrigState.NO_TRIG  # no trig detected
+        return value, timestamp, trig_state
+    
 
-while True:
-    # we'll assume that the pot didn't move
-    trim_pot_changed = False
+class SensorHandler:
+    def __init__(self, number_of_sensors: int, num_sample_columns: int, num_consecutive_trigs):
+        self.number_of_sensors = number_of_sensors
+        self.num_sample_columns = num_sample_columns
+        self.num_consecutive_trigs = num_consecutive_trigs
+        
+        self.index_counter = 0
+        self.create_log_arrays()  # create log arrays to store log samples
 
-    # read the analog pin
-    trim_pot = chan0.value
+    def create_log_arrays(self):
+        self.sensor_log_sample_array = self.create_log_sample_array(self.number_of_sensors, self.num_sample_columns)
+        self.consecutive_num_trigs_array = self.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
+        
+    def register_log_sample(self, sensor_id, value: int, timestamp: int, trig_state: SensorTrigState):
+        # check if there are any empty columns to store sample in, otherwise create more columns
+        # check for emty columns only when all sensors have stored their data samples (1st sensor_id is 'sensor0'
+        if(sensor_id == self.number_of_sensors - 1):
+            #print(np.shape(self.sensor_log_sample_array)[1])
+            if(np.shape(self.sensor_log_sample_array)[1] <= self.index_counter + 1):    # check if all array columns are occupied
+                new_columns = self.create_log_sample_array(self.number_of_sensors, 1)   # create an extra column
+                self.sensor_log_sample_array = np.append(self.sensor_log_sample_array, new_columns, 1)
+        
+        # store log sample
+        self.sensor_log_sample_array[sensor_id][self.index_counter].set_sample(value, timestamp, trig_state)
 
-    # how much has it changed since the last read?
-    pot_adjust = abs(trim_pot - last_read)
+        # increase index_counter when all sensors have stored their data samples, first sensor_id is 'sensor0'
+        if(sensor_id == self.number_of_sensors - 1):
+            self.index_counter += 1
+            return self.index_counter - 1   # value adjusted to return the index of last stored sample
+        return self.index_counter
 
-    if pot_adjust > tolerance:
-        trim_pot_changed = True
+    def create_log_sample_array(self, number_of_sensors: int, num_of_columns):
+        return np.array([[SensorSample() for _ in range(num_of_columns)] for _ in range(number_of_sensors)], dtype=object)    # create an number_of_sensors dimensional array
+                                
+    def get_log_sample(self, sensor_id, sample_index):
+        return self.sensor_log_sample_array[sensor_id][sample_index]
+    
+    def get_sensor_log_sample_array(self):
+        return self.sensor_log_sample_array
 
-    if trim_pot_changed:
-        # convert 16bit adc0 (0-65535) trim pot read into 0-100 volume level
-        set_volume = remap_range(trim_pot, 0, 65535, 0, 100)
 
-        # set OS volume playback volume
-        print('Volume = {volume}%' .format(volume = set_volume))
-        set_vol_cmd = 'sudo amixer cset numid=1 -- {volume}% > /dev/null' \
-        .format(volume = set_volume)
-        os.system(set_vol_cmd)
+class TrigEvaluationManager:
+    def __init__(self):
+        self.sensor_trig_threshold = 1000   # sensor digital value (0 - 65535) to represent IR-sensor detection, a value below threshold means sensor is trigged/blocked
+        self.number_of_sensors = 2
+        self.sensors = []   # list containing all sensors
+        self.initial_num_sample_columns = 1     # specifies number of columns for the initial log array
+        self.readout_frequency = 2  # Hz [12 Hz - run] 
+        self.index_counter = 0      # current index of sensor_log_sample_array
+        self.num_consecutive_trigs = 5     # [5 - run] number of sensor trigs in a consecutive order to count it as a trig
+        self.sensor_handler = SensorHandler(self.number_of_sensors, self.initial_num_sample_columns, self.num_consecutive_trigs)
 
-        # save the potentiometer reading for the next loop
-        last_read = trim_pot
+    def run(self):
+        for sensor_id in range(self.number_of_sensors):
+            self.sensors.append(IrSensor(sensor_id, self.sensor_trig_threshold))
+    
+        while(True):    
+            for sensor_id, sensor in enumerate(self.sensors):
+                self.index_counter = self.sensor_handler.register_log_sample(sensor_id, *sensor.get_sensor_data())    # '*' unpacks the tuple returned from the function call
+                #===
+                print(f"(sensor_id, index_counter: {sensor_id}, {self.index_counter})") 
+                print(self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].value, self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].timestamp, self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].trig_state.name)
 
-    # hang out and do nothing for a half second
-    time.sleep(0.5)
-"""
+            time.sleep(1/self.readout_frequency) # setting periodic time for the sensor read
 
-"""
-# led set up
-led = digitalio.DigitalInOut(board.D18)
-led.direction = digitalio.Direction.OUTPUT
+def main():
+    app = TrigEvaluationManager()
+    app.run()
 
-list = [0.5, 3, 1, 2, 1, 0.5, 2, 1, 4]
-toggle = False
+if __name__ == "__main__":
+   main()
 
-for i in list:
-    if toggle == True:
-        led.value = True    # Turn LED ON
-        print("ON for", i, "seconds")
-        toggle = False
-    elif toggle == False:
-        led.value = False   # Turn LED OFF
-        print("OFF for", i, "seconds")
-        toggle = True
-    time.sleep(i)       # Wait for i seconds
-"""
+
+# number_of_sensors = 2
+# sensors = []
+# sensor_trig_threshold = 1000
+# for sensor_id in range(number_of_sensors):
+#     sensors.append(IrSensor(sensor_id, sensor_trig_threshold))
+#     print("sensor", sensor_id)
+#     print(sensors[sensor_id].get_sensor_data())
+#     print("sensor", sensor_id)
+
