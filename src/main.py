@@ -52,7 +52,7 @@ class IrSensor:
         value = sensor_read.value
         timestamp = round(time.time()*1000)
         
-        # evalute readout value to determine if sensor was trigged (blocked)
+        # evaluate readout value to determine if sensor was trigged (blocked)
         trig_state = SensorTrigState.NO_TRIG
         if(value < self.sensor_trig_threshold):   # detect sensor trig. below threshold == trig, above threshold = no trig
             trig_state = SensorTrigState.TRIG    # trig detected
@@ -100,6 +100,12 @@ class SensorHandler:
     
     def get_sensor_log_sample_array(self):
         return self.sensor_log_sample_array
+    
+    def get_element_consecutive_num_trigs_array(self, sensor_id, sample_index):
+        return self.consecutive_num_trigs_array[sensor_id][sample_index]
+    
+    def get_consecutive_num_trigs_array(self):
+        return self.consecutive_num_trigs_array
 
 
 class TrigEvaluationManager:
@@ -108,7 +114,7 @@ class TrigEvaluationManager:
         self.number_of_sensors = 2
         self.sensors = []   # list containing all sensors
         self.initial_num_sample_columns = 1     # specifies number of columns for the initial log array
-        self.readout_frequency = 2  # Hz [12 Hz - run] 
+        self.readout_frequency = 0.5  # Hz [12 Hz = real run mode] 
         self.index_counter = 0      # current index of sensor_log_sample_array
         self.num_consecutive_trigs = 5     # [5 - run] number of sensor trigs in a consecutive order to count it as a trig
         self.sensor_handler = SensorHandler(self.number_of_sensors, self.initial_num_sample_columns, self.num_consecutive_trigs)
@@ -125,6 +131,24 @@ class TrigEvaluationManager:
                 print(self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].value, self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].timestamp, self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].trig_state.name)
 
             time.sleep(1/self.readout_frequency) # setting periodic time for the sensor read
+            
+            # start adding samples to the consecutive_trigs array and analyse it when number of samples exceeds size of the consecutive_trigs array
+            if(self.index_counter >= self.num_consecutive_trigs):
+                self.start_stop_logging()
+
+    def start_stop_logging(self):
+        # add samples to consecutive_num_trigs_array
+        for sensor_id in range(self.number_of_sensors):
+            for list_index in range(self.num_consecutive_trigs):
+                self.sensor_handler.consecutive_num_trigs_array[sensor_id][list_index] = self.sensor_handler.get_log_sample(sensor_id, self.index_counter - (self.num_consecutive_trigs - list_index))
+                
+                print(f"(sensor_id, list_index: {sensor_id}, {list_index})") 
+                print(self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).timestamp, self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).trig_state.name)
+            
+        # check if trig state is stable by verifying that all elements in a row have the same trig state independently of the trig states in the other row/rows
+        trig_states = np.array([[sample.trig_state.name for sample in row] for row in self.sensor_handler.consecutive_num_trigs_array])
+        row_check = np.all(trig_states == trig_states[:, [0]], axis=1)
+        print(row_check)
 
 def main():
     app = TrigEvaluationManager()
@@ -132,14 +156,3 @@ def main():
 
 if __name__ == "__main__":
    main()
-
-
-# number_of_sensors = 2
-# sensors = []
-# sensor_trig_threshold = 1000
-# for sensor_id in range(number_of_sensors):
-#     sensors.append(IrSensor(sensor_id, sensor_trig_threshold))
-#     print("sensor", sensor_id)
-#     print(sensors[sensor_id].get_sensor_data())
-#     print("sensor", sensor_id)
-
