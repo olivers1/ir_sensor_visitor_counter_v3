@@ -128,7 +128,8 @@ class TrigEvaluationManager:
                 self.index_counter = self.sensor_handler.register_log_sample(sensor_id, *sensor.get_sensor_data())    # '*' unpacks the tuple returned from the function call
                 #===
                 print(f"(sensor_id, index_counter: {sensor_id}, {self.index_counter})") 
-                print(self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].value, self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].timestamp, self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].trig_state.name)
+                print(self.sensor_handler.get_log_sample(sensor_id, self.index_counter).value, self.sensor_handler.get_log_sample(sensor_id, self.index_counter).timestamp, self.sensor_handler.get_log_sample(sensor_id, self.index_counter).trig_state.name)
+                #print(self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].value, self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].timestamp, self.sensor_handler.sensor_log_sample_array[sensor_id][self.index_counter].trig_state.name)
 
             time.sleep(1/self.readout_frequency) # setting periodic time for the sensor read
             
@@ -141,7 +142,9 @@ class TrigEvaluationManager:
         for sensor_id in range(self.number_of_sensors):
             for list_index in range(self.num_consecutive_trigs):
                 self.sensor_handler.consecutive_num_trigs_array[sensor_id][list_index] = self.sensor_handler.get_log_sample(sensor_id, self.index_counter - (self.num_consecutive_trigs - list_index))
-                
+            
+        for list_index in range(self.num_consecutive_trigs):
+            for sensor_id in range(self.number_of_sensors):
                 print(f"(sensor_id, list_index: {sensor_id}, {list_index})") 
                 print(self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).timestamp, self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).trig_state.name)
             
