@@ -66,7 +66,6 @@ class SensorHandler:
         self.number_of_sensors = number_of_sensors
         self.num_sample_columns = num_sample_columns
         self.num_consecutive_trigs = num_consecutive_trigs
-        
         self.index_counter = 0
         self.create_log_arrays()  # create log arrays to store log samples
 
@@ -172,6 +171,8 @@ class TrigEvaluationManager:
             AppLoggingState.ALL_SENSORS_TRIGGED: CountdownTimer(5), # timeout before evaluate logs after sensors all sensors are unblocked (NO_TRIG)
         }
         self.log_evalution_is_done = False
+        self.sensor_trig_arrays = []
+
 
     def run(self):
         for sensor_id in range(self.number_of_sensors):
@@ -192,8 +193,10 @@ class TrigEvaluationManager:
                 self.verify_sensor_trig_states()
             
             self.update_state()
-            if self.current_state == AppLoggingState.LOG_EVALUATION:
-                pass
+            if self.current_state == AppLoggingState.LOG_EVALUATION or self.current_state == AppLoggingState.LOG_STOP:
+                self.evaluate_logs(self.index_start_sample, self.index_stop_sample)
+            
+            self.clear_log_memory()
  
 
 
@@ -214,7 +217,7 @@ class TrigEvaluationManager:
         print(row_check)
 
         # store current verified trig state for the sensors
-        self.verified_sensor_trig_state = []    # clear variable each iteration to only store current trig state for the sensors
+        self.verified_sensor_trig_state = []    # clear array at each iteration to only store current trig state for the sensors
         for sensor_id, is_stable in enumerate(row_check):
             if is_stable == True:
                 self.verified_sensor_trig_state.append(self.sensor_handler.consecutive_num_trigs_array[sensor_id][0].trig_state)
@@ -254,6 +257,8 @@ class TrigEvaluationManager:
 
                 if timer.ready():
                     self.current_state = AppLoggingState.LOG_EVALUATION
+                    self.capture_start_stop_index(AppLoggingState.LOG_STOP)     # store log stop index from the log_sample_array
+            
             elif any(s == SensorTrigState.TRIG for s in self.verified_sensor_trig_state):
                 timer.cancel()
 
@@ -266,11 +271,31 @@ class TrigEvaluationManager:
     def capture_start_stop_index(self, log_action: AppLoggingState):
         # capture sample index when app logging state is set to LOG_START
         if log_action == AppLoggingState.LOG_START:
-            self.index_start_sample = self.index_counter - self.num_consecutive_trigs   # adjust index to the first sample to detect movement
+            self.index_start_sample = self.index_counter - (self.num_consecutive_trigs - 1)   # adjust index to the first sample to detect movement
             print("index_start_sample:", self.index_start_sample)
-        elif log_action == AppLoggingState.LOG_STOP:
-            self.index_stop_sample = self.index_counter
+        elif log_action == AppLoggingState.LOG_STOP or log_action == AppLoggingState.LOG_EVALUATION:
+            self.index_stop_sample = self.index_counter + 1
             print("index_stop_sample:", self.index_stop_sample)
+
+    def evaluate_logs(self, index_start, index_stop):
+        
+        # create array to store log samples when sensor is trigged for each of the sensors
+        for sensor_id, sensor in enumerate(self.sensors):
+            sensor_trigs = []
+            for index in range(index_start, index_stop):
+                sample = self.sensor_handler.get_log_sample(sensor_id, index)
+                if sample.trig_state == SensorTrigState.TRIG:
+                    sensor_trigs.append(sample)
+
+            self.sensor_trig_arrays.append(sensor_trigs) 
+            print("sensor_id:", sensor_id)
+            for sample in sensor_trigs:
+                print(sample.trig_state.name, sample.timestamp) 
+    
+    def clear_log_memory(self):
+        self.sensor_trig_arrays = []    # clear the trig array before each log evaluation
+                
+
 
 def main():
     app = TrigEvaluationManager()
