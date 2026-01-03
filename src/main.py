@@ -88,7 +88,6 @@ class SensorHandler:
         # increase index_counter when all sensors have stored their data samples, first sensor_id is 'sensor0'
         if(sensor_id == self.number_of_sensors - 1):
             self.index_counter += 1
-            return self.index_counter - 1   # value adjusted to return the index of last stored sample
         return self.index_counter
 
     def create_log_sample_array(self, number_of_sensors: int, num_of_columns):
@@ -158,7 +157,8 @@ class TrigEvaluationManager:
         self.sensors = []   # list containing all sensors
         self.initial_num_sample_columns = 1     # specifies number of columns for the initial log array
         self.readout_frequency = 1  # Hz [12 Hz = real run mode] 
-        self.index_counter = 0      # current index of sensor_log_sample_array
+        self.current_index_counter = 0  # current index of sensor_log_sample_array
+        self.next_index_counter = 0     # next index of sensor_log_sample_array 
         self.num_consecutive_trigs = 5     # [5 - run] number of sensor trigs in a consecutive order to count it as a trig
         self.sensor_handler = SensorHandler(self.number_of_sensors, self.initial_num_sample_columns, self.num_consecutive_trigs)
         self.verified_sensor_trig_state = [SensorTrigState.UNKNOWN, SensorTrigState.UNKNOWN]
@@ -166,9 +166,11 @@ class TrigEvaluationManager:
         self.previous_state = AppLoggingState.INIT  # keeps track of the previous app logging state
         self.index_start_sample = 0     # index at sensor_log_sample_array when logging is started
         self.index_stop_sample = 0      # index at sensor_log_sample_array when logging is stopped
+        self.log_stop_timeout = 10
+        self.log_finished_timeout = 5
         self.countdown_timers = {
-            AppLoggingState.LOG_START: CountdownTimer(10),  # timeout if only one sensor triggers
-            AppLoggingState.ALL_SENSORS_TRIGGED: CountdownTimer(5), # timeout before evaluate logs after sensors all sensors are unblocked (NO_TRIG)
+            AppLoggingState.LOG_START: CountdownTimer(self.log_stop_timeout),  # timeout if only one sensor triggers
+            AppLoggingState.ALL_SENSORS_TRIGGED: CountdownTimer(self.log_finished_timeout), # timeout before evaluate logs after sensors all sensors are unblocked (NO_TRIG)
         }
         self.log_evalution_is_done = False
         self.sensor_trig_arrays = []
@@ -181,15 +183,18 @@ class TrigEvaluationManager:
         while(True):    
             print("current_state:", self.current_state.name)
             for sensor_id, sensor in enumerate(self.sensors):
-                self.index_counter = self.sensor_handler.register_log_sample(sensor_id, *sensor.get_sensor_data())    # '*' unpacks the tuple returned from the function call
-                #===
-                print(f"(sensor_id, index_counter: {sensor_id}, {self.index_counter})") 
-                print(self.sensor_handler.get_log_sample(sensor_id, self.index_counter).value, self.sensor_handler.get_log_sample(sensor_id, self.index_counter).timestamp, self.sensor_handler.get_log_sample(sensor_id, self.index_counter).trig_state.name)
-                
+                self.next_index_counter = self.sensor_handler.register_log_sample(sensor_id, *sensor.get_sensor_data())    # '*' unpacks the tuple returned from the function call
+            
+                self.current_index_counter = self.next_index_counter - 1
+
+            for sensor_id, sensor in enumerate(self.sensors):
+                print(f"(sensor_id, current_index_counter: {sensor_id}, {self.current_index_counter})") 
+                print(self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).value, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).timestamp, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).trig_state.name)
+                    
             time.sleep(1/self.readout_frequency) # setting periodic time for the sensor read
             
             # start adding samples to the consecutive_trigs array and analyse it when number of samples exceeds size of the consecutive_trigs array
-            if(self.index_counter >= self.num_consecutive_trigs - 1):
+            if(self.current_index_counter >= self.num_consecutive_trigs - 1):
                 self.verify_sensor_trig_states()
             
             self.update_state()
@@ -204,7 +209,7 @@ class TrigEvaluationManager:
         # add samples to consecutive_num_trigs_array
         for sensor_id in range(self.number_of_sensors):
             for list_index in range(self.num_consecutive_trigs):
-                self.sensor_handler.consecutive_num_trigs_array[sensor_id][list_index] = self.sensor_handler.get_log_sample(sensor_id, self.index_counter - ((self.num_consecutive_trigs - 1) - list_index))
+                self.sensor_handler.consecutive_num_trigs_array[sensor_id][list_index] = self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter - ((self.num_consecutive_trigs - 1) - list_index))
             
         for list_index in range(self.num_consecutive_trigs):
             for sensor_id in range(self.number_of_sensors):
@@ -271,10 +276,10 @@ class TrigEvaluationManager:
     def capture_start_stop_index(self, log_action: AppLoggingState):
         # capture sample index when app logging state is set to LOG_START
         if log_action == AppLoggingState.LOG_START:
-            self.index_start_sample = self.index_counter - (self.num_consecutive_trigs - 1)   # adjust index to the first sample to detect movement
+            self.index_start_sample = self.next_index_counter - self.num_consecutive_trigs   # adjust index to the first sample to detect movement
             print("index_start_sample:", self.index_start_sample)
         elif log_action == AppLoggingState.LOG_STOP or log_action == AppLoggingState.LOG_EVALUATION:
-            self.index_stop_sample = self.index_counter + 1
+            self.index_stop_sample = self.next_index_counter
             print("index_stop_sample:", self.index_stop_sample)
 
     def evaluate_logs(self, index_start, index_stop):
