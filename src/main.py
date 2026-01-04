@@ -106,31 +106,19 @@ class SensorHandler:
         return self.consecutive_num_trigs_array
 
 
-class AppLoggingState(Enum):
-    INIT = 0
-    IDLE = 1
-    LOG_START = 2
-    ALL_SENSORS_TRIGGED = 3
-    LOG_STOP = 4
-    LOG_EVALUATION = 5
-
-
 class CountdownTimer:
     def __init__(self, delay):
         self.delay = delay
         self.fire_time = time.monotonic() + delay
-        self.fired = False
         self.started = False
     
     def start(self):
         # start or restart the timer
         self.fire_time = time.monotonic() + self.delay
-        self.fired = False
         self.started = True
 
     def cancel(self):
         self.fire_time = None
-        self.fired = False
         self.started = False
 
     def is_started(self):
@@ -139,15 +127,32 @@ class CountdownTimer:
     def ready(self):
         if not self.started or self.fire_time is None:
             return False
-    
-        if self.fired == True:
-            return False
         
         if time.monotonic() >= self.fire_time:
-            self.fired = True
+            self.started = False
             return True
         
         return False
+
+
+class SensorsState(Enum):
+    NO_TRIG = 0
+    EXACTLY_ONE_TRIG = 1
+    ALL_TRIG = 2
+
+
+class AppLoggingState(Enum):
+    INIT = 0
+    IDLE = 1
+    LOG_START = 2
+    LOGGING = 3
+    LOG_STOP = 4
+    LOG_EVALUATION = 5
+
+
+class SetLogIndex(Enum):
+    STOP = 0
+    START = 1
 
 
 class TrigEvaluationManager:
@@ -164,13 +169,13 @@ class TrigEvaluationManager:
         self.verified_sensor_trig_state = [SensorTrigState.UNKNOWN, SensorTrigState.UNKNOWN]
         self.current_state = AppLoggingState.INIT  # keeps track of current app logging state
         self.previous_state = AppLoggingState.INIT  # keeps track of the previous app logging state
-        self.index_start_sample = 0     # index at sensor_log_sample_array when logging is started
-        self.index_stop_sample = 0      # index at sensor_log_sample_array when logging is stopped
-        self.log_stop_timeout = 10
+        self.log_start_index = 0     # index at sensor_log_sample_array when logging is started
+        self.log_stop_index = 0      # index at sensor_log_sample_array when logging is stopped
+        self.log_started_timeout = 10
         self.log_finished_timeout = 5
         self.countdown_timers = {
-            AppLoggingState.LOG_START: CountdownTimer(self.log_stop_timeout),  # timeout if only one sensor triggers
-            AppLoggingState.ALL_SENSORS_TRIGGED: CountdownTimer(self.log_finished_timeout), # timeout before evaluate logs after sensors all sensors are unblocked (NO_TRIG)
+            SensorsState.EXACTLY_ONE_TRIG: CountdownTimer(self.log_started_timeout),  # timeout if only one sensor triggers
+            SensorsState.NO_TRIG: CountdownTimer(self.log_finished_timeout), # timeout before evaluate logs after sensors all sensors are unblocked (NO_TRIG)
         }
         self.log_evalution_is_done = False
         self.sensor_trig_arrays = []
@@ -197,13 +202,7 @@ class TrigEvaluationManager:
             if(self.current_index_counter >= self.num_consecutive_trigs - 1):
                 self.verify_sensor_trig_states()
             
-            self.update_state()
-            if self.current_state == AppLoggingState.LOG_EVALUATION or self.current_state == AppLoggingState.LOG_STOP:
-                self.evaluate_logs(self.index_start_sample, self.index_stop_sample)
-            
-            self.clear_log_memory()
- 
-
+            self.update_logging_state()
 
     def verify_sensor_trig_states(self):
         # add samples to consecutive_num_trigs_array
@@ -216,10 +215,10 @@ class TrigEvaluationManager:
                 print(f"(sensor_id, list_index: {sensor_id}, {list_index})") 
                 print(self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).timestamp, self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).trig_state.name)
             
-        # check if trig state is stable by verifying that all elements in a row have the same trig state independently of the trig states in the other row/rows
+        # check if trig state is stable by verifying that all elements in a row only have the same trig state. Independtly of what trig state the other row have
         trig_states = np.array([[sample.trig_state.name for sample in row] for row in self.sensor_handler.consecutive_num_trigs_array])
         row_check = np.all(trig_states == trig_states[:, [0]], axis=1)
-        print(row_check)
+        #print(row_check)
 
         # store current verified trig state for the sensors
         self.verified_sensor_trig_state = []    # clear array at each iteration to only store current trig state for the sensors
@@ -230,64 +229,97 @@ class TrigEvaluationManager:
                 self.verified_sensor_trig_state.append(SensorTrigState.UNKNOWN) 
         print("verified_sensor_trig_state:", [sensor_id.name for sensor_id in self.verified_sensor_trig_state])
 
-    def update_state(self):
-        #state_changed = self.current_state != self.previous_state
+    def update_sensors_state(self):
+        sensors_state = SensorsState.NO_TRIG
+        if all(s == SensorTrigState.NO_TRIG for s in self.verified_sensor_trig_state):
+            sensors_state = SensorsState.NO_TRIG
+        elif sum(s == SensorTrigState.TRIG for s in self.verified_sensor_trig_state) == 1:
+            sensors_state = SensorsState.EXACTLY_ONE_TRIG
+        elif all(s == SensorTrigState.TRIG for s in self.verified_sensor_trig_state):
+            sensors_state = SensorsState.ALL_TRIG
+        return sensors_state
+    
+    def update_logging_state(self):
+        sensors_state = self.update_sensors_state()
 
-        # verify that both sensors are unblocked (NO_TRIG) and update app logging state to IDLE
-        if self.current_state == AppLoggingState.INIT and all(s == SensorTrigState.NO_TRIG for s in self.verified_sensor_trig_state):
-            self.current_state = AppLoggingState.IDLE
-        # set app logging state to LOG_START if any of the sensors are confirmed to be in TRIG state
-        elif self.current_state == AppLoggingState.IDLE and any(s == SensorTrigState.TRIG for s in self.verified_sensor_trig_state):
-            self.current_state = AppLoggingState.LOG_START
-            self.capture_start_stop_index(AppLoggingState.LOG_START)    # store log start index from the log_sample_array
-            self.countdown_timers[AppLoggingState.LOG_START].start()    # start timer to timeout logging if only one of the sensors is trigged  
+        if self.current_state == AppLoggingState.INIT:
+            if sensors_state == SensorsState.NO_TRIG:
+                #self.current_state = AppLoggingState.IDLE
+                self.enter_state(AppLoggingState.IDLE)
         
-        # stop logging if timer times out or update logging state to ALL_SENSORS_TRIGGED and cancel timer if both sensors are trigged
+        elif self.current_state == AppLoggingState.IDLE:
+            if sensors_state == SensorsState.EXACTLY_ONE_TRIG or sensors_state == SensorsState.ALL_TRIG:
+                #self.current_state = AppLoggingState.LOG_START
+                self.enter_state(AppLoggingState.LOG_START)
+        
         elif self.current_state == AppLoggingState.LOG_START:
-            timer = self.countdown_timers[AppLoggingState.LOG_START]
-
-            if timer.ready() == True and sum(s == SensorTrigState.TRIG for s in self.verified_sensor_trig_state) == 1:
-                self.current_state = AppLoggingState.LOG_STOP
-                self.capture_start_stop_index(AppLoggingState.LOG_STOP)     # store log stop index from the log_sample_array
-            # if countdown timer has not fired yet and both sensors are being trigged, cancel the timer and update logging state accordingly
-            elif all(s == SensorTrigState.TRIG for s in self.verified_sensor_trig_state):
-                timer.cancel()   # stop timeout timer
-                self.current_state = AppLoggingState.ALL_SENSORS_TRIGGED
-        # when all sensors are trigged, wait for all sensors to got to NO_TRIG state to capture stop index from the log sample array
-        elif self.current_state == AppLoggingState.ALL_SENSORS_TRIGGED:
-            timer = self.countdown_timers[AppLoggingState.ALL_SENSORS_TRIGGED]
-            if all(s == SensorTrigState.NO_TRIG for s in self.verified_sensor_trig_state):
-                if self.countdown_timers[AppLoggingState.ALL_SENSORS_TRIGGED].is_started() == False:
-                    timer.start()
-
-                if timer.ready():
-                    self.current_state = AppLoggingState.LOG_EVALUATION
-                    self.capture_start_stop_index(AppLoggingState.LOG_STOP)     # store log stop index from the log_sample_array
-            
-            elif any(s == SensorTrigState.TRIG for s in self.verified_sensor_trig_state):
-                timer.cancel()
-
-        elif self.current_state == AppLoggingState.LOG_EVALUATION and self.log_evalution_is_done == True:
-            self.current_state = AppLoggingState.INIT
-            
-        #self.previous_state = self.current_state
-        # ADD CODE HERE TO SET TO RUN A TIMER AND AFTER IT FINISHED ADD A NEW APP LOGGING STATE SAYING FIRST MEAN VALUE SESSION COMPLETED
-     
-    def capture_start_stop_index(self, log_action: AppLoggingState):
-        # capture sample index when app logging state is set to LOG_START
-        if log_action == AppLoggingState.LOG_START:
-            self.index_start_sample = self.next_index_counter - self.num_consecutive_trigs   # adjust index to the first sample to detect movement
-            print("index_start_sample:", self.index_start_sample)
-        elif log_action == AppLoggingState.LOG_STOP or log_action == AppLoggingState.LOG_EVALUATION:
-            self.index_stop_sample = self.next_index_counter
-            print("index_stop_sample:", self.index_stop_sample)
-
-    def evaluate_logs(self, index_start, index_stop):
+            if sensors_state == SensorsState.ALL_TRIG:
+                #self.current_state = AppLoggingState.LOGGING
+                self.enter_state(AppLoggingState.LOGGING)
         
+        elif self.current_state == AppLoggingState.LOGGING:
+            if sensors_state == SensorsState.NO_TRIG:
+                if self.countdown_timers[SensorsState.NO_TRIG].is_started() == False:
+                    self.countdown_timers[SensorsState.NO_TRIG].start()
+
+                if self.countdown_timers[SensorsState.NO_TRIG].ready():
+                    #self.current_state == AppLoggingState.LOG_STOP
+                    self.enter_state(AppLoggingState.LOG_STOP)
+            
+            elif sensors_state == SensorsState.EXACTLY_ONE_TRIG or sensors_state == SensorsState.ALL_TRIG:
+                self.countdown_timers[SensorsState.NO_TRIG].cancel()
+        
+        elif self.current_state == AppLoggingState.LOG_STOP:
+            #self.current_state = AppLoggingState.LOG_EVALUATION
+            self.enter_state(AppLoggingState.LOG_EVALUATION)
+
+        elif self.current_state == AppLoggingState.LOG_EVALUATION:
+            #self.current_state = AppLoggingState.INIT
+            self.enter_state(AppLoggingState.INIT)
+
+    def enter_state(self, new_state):
+        if new_state == self.current_state:     # no state change since current state is same as new state
+            return
+        
+        self.previous_state = self.current_state
+        self.current_state = new_state
+
+        if new_state == AppLoggingState.INIT:
+            # clear memory logs
+            pass
+        elif new_state == AppLoggingState.IDLE:
+            pass
+        elif new_state == AppLoggingState.LOG_START:
+            self.capture_start_stop_index(SetLogIndex.START)    # set log start index
+            if self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].is_started == False:
+                self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].start()    # start timer to timeout if only one sensor is trigged
+
+            if self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].ready():    # if timer finishes, set log stop index
+                self.capture_start_stop_index(SetLogIndex.STOP)
+
+        elif new_state == AppLoggingState.LOGGING:
+            self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].cancel()   # cancel timer if all sensor have been trigged
+            
+        elif new_state == AppLoggingState.LOG_STOP:
+            self.capture_start_stop_index(SetLogIndex.STOP)     # set log stop index
+
+        elif new_state == AppLoggingState.LOG_EVALUATION:
+            self.evaluate_logs(self.log_start_index, self.log_stop_index)
+            
+    def capture_start_stop_index(self, action):
+        # capture sample index when app logging is set to start and stop respectively
+        if action == SetLogIndex.START:
+            self.log_start_index = self.next_index_counter - self.num_consecutive_trigs   # adjust index to the first sample when sensor was firstly trigged
+            print("log_start_index:", self.log_start_index)
+        elif action == SetLogIndex.STOP:
+            self.log_stop_index = self.next_index_counter
+            print("log_stop_index:", self.log_stop_index)
+
+    def evaluate_logs(self, start_index, stop_index):
         # create array to store log samples when sensor is trigged for each of the sensors
         for sensor_id, sensor in enumerate(self.sensors):
             sensor_trigs = []
-            for index in range(index_start, index_stop):
+            for index in range(start_index, stop_index):
                 sample = self.sensor_handler.get_log_sample(sensor_id, index)
                 if sample.trig_state == SensorTrigState.TRIG:
                     sensor_trigs.append(sample)
@@ -296,10 +328,16 @@ class TrigEvaluationManager:
             print("sensor_id:", sensor_id)
             for sample in sensor_trigs:
                 print(sample.trig_state.name, sample.timestamp) 
+
+            # Go through the logs, analyse to find index when both sensors are trigged at the same time for minimum num_consecutive_trigs. 
+            # Store the index in as log_break_index of when both sensors was trigged for first series (in case there are more than one series)
+            # Run through the logs from log_start_index --> log_break_index and extract the mean value for each of the sensors
+            # Run through the logs from log_break_index + 1 --> log_stop_index and extract the mean value for each of the sensors
+            # Then extract which of the sensors that trigged first (and second) in log_part_1 and which sensor that trigged first (and second) in log part_2
+            # Validate the trig pattern with expected trig pattern and output ENTRY, EXIT or INVALID as movement direction
     
     def clear_log_memory(self):
-        self.sensor_trig_arrays = []    # clear the trig array before each log evaluation
-                
+        self.sensor_trig_arrays = []    # clear the trig array before each log evaluation          
 
 
 def main():
