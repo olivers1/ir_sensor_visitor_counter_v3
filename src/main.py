@@ -335,7 +335,8 @@ class TrigEvaluationManager:
             # Run through the logs from log_break_index + 1 --> log_stop_index and extract the mean value for each of the sensors
             # Then extract which of the sensors that trigged first (and second) in log_part_1 and which sensor that trigged first (and second) in log part_2
             # Validate the trig pattern with expected trig pattern and output ENTRY, EXIT or INVALID as movement direction
-    
+            # TEST TEXT
+
     def clear_log_memory(self):
         self.sensor_trig_arrays = []    # clear the trig array before each log evaluation          
 
