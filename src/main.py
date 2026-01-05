@@ -70,13 +70,19 @@ class SensorHandler:
         self.sensor_log_sample_array = self.create_log_sample_array(self.number_of_sensors, self.num_sample_columns)
         self.consecutive_num_trigs_array = self.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
 
+    def reset(self):
+        """Clear all logged samples and counters."""
+        self.index_counter = 0
+        self.sensor_log_sample_array = self.create_log_sample_array(self.number_of_sensors, self.num_sample_columns)
+        self.consecutive_num_trigs_array = self.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
+
     def register_log_sample(self, sensor_id, value: int, timestamp: int, trig_state: SensorTrigState):
         # check if there are any empty columns to store sample in, otherwise create more columns
         # check for emty columns only when all sensors have stored their data samples (1st sensor_id is 'sensor0'
         if(sensor_id == self.number_of_sensors - 1):
             #print(np.shape(self.sensor_log_sample_array)[1])
             if(np.shape(self.sensor_log_sample_array)[1] <= self.index_counter + 1):    # check if all array columns are occupied
-                new_columns = self.create_log_sample_array(self.number_of_sensors, 1)   # create an extra column
+                new_columns = self.create_log_sample_array(self.number_of_sensors, 200)     # create 200 extra columns
                 self.sensor_log_sample_array = np.append(self.sensor_log_sample_array, new_columns, 1)
         
         # store log sample
@@ -153,12 +159,18 @@ class SetLogIndex(Enum):
     START = 1
 
 
+class MovementDirection(Enum):
+    ENTRY = "ENTRY"
+    EXIT = "EXIT"
+    INVALID = "INVALID"
+
+
 class TrigEvaluationManager:
     def __init__(self):
         self.sensor_trig_threshold = 1000   # sensor digital value (0 - 65535) to represent IR-sensor detection, a value below threshold means sensor is trigged/blocked
         self.number_of_sensors = 2
         self.sensors = []   # list containing all sensors
-        self.initial_num_sample_columns = 1     # specifies number of columns for the initial log array
+        self.initial_num_sample_columns = 1000  # specifies number of columns for the initial log array
         self.readout_frequency = 1  # Hz [12 Hz = real run mode] 
         self.current_index_counter = 0  # current index of sensor_log_sample_array
         self.next_index_counter = 0     # next index of sensor_log_sample_array 
@@ -183,7 +195,6 @@ class TrigEvaluationManager:
             self.sensors.append(IrSensor(sensor_id, self.sensor_trig_threshold))
     
         while(True):    
-            print("current_state:", self.current_state.name)
             for sensor_id, sensor in enumerate(self.sensors):
                 self.next_index_counter = self.sensor_handler.register_log_sample(sensor_id, *sensor.get_sensor_data())    # '*' unpacks the tuple returned from the function call
             
@@ -200,6 +211,7 @@ class TrigEvaluationManager:
                 self.verify_sensor_trig_states()
             
             self.update_logging_state()
+            print("current_state:", self.current_state.name)
 
     def verify_sensor_trig_states(self):
         # add samples to consecutive_num_trigs_array
@@ -357,11 +369,10 @@ class TrigEvaluationManager:
             print(f"sensor_id {sensor_id}")
             for sample in sensor_samples:
                 print(sample.trig_state.name, sample.timestamp)
-
         
 
-        
-     
+        print("movement_direction:", self.detect_movement_direction())
+
             # Go through the logs, analyse to find index when both sensors are trigged at the same time for minimum num_consecutive_trigs. 
             # Store the index in as log_break_index of when both sensors was trigged for first series (in case there are more than one series)
             # Run through the logs from log_start_index --> log_break_index and extract the mean value for each of the sensors
@@ -369,10 +380,52 @@ class TrigEvaluationManager:
             # Then extract which of the sensors that trigged first (and second) in log_part_1 and which sensor that trigged first (and second) in log part_2
             # Validate the trig pattern with expected trig pattern and output ENTRY, EXIT or INVALID as movement direction
 
+    def detect_movement_direction(self):
+        """
+        Determines ENTRY / EXIT / INVALID based on sensor mean timestamps.
+        Assumes exactly 2 sensors.
+        """
+        if len(self.sensor_mean_values) != 2:
+            return MovementDirection.INVALID
+
+        t0, t1 = self.sensor_mean_values
+
+        # If one or both sensors never triggered
+        if t0 == 0 or t1 == 0:
+            return MovementDirection.INVALID
+
+        # Same timestamp → ambiguous
+        if abs(t0 - t1) < 1e-6:
+            return MovementDirection.INVALID
+
+        if t0 < t1:
+            return MovementDirection.EXIT
+        else:
+            return MovementDirection.ENTRY          
+
     def clear_log_memory(self):
-        self.sensor_trig_arrays = []    # clear the trig array before each log evaluation          
-        #self.sensor_handler.consecutive_num_trigs_array = self.sensor_handler.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
+        # reset sensor handler buffers
+        self.sensor_handler.reset()
         
+        # reset counters
+        self.current_index_counter = 0
+        self.next_index_counter = 0
+
+        # reset indices
+        self.log_start_index = 0
+        self.log_stop_index = 0
+
+        # clear evaluation results
+        self.sensor_trig_arrays = []
+        self.sensor_mean_values = []
+
+        # reset verified trig states
+        self.verified_sensor_trig_state = [SensorTrigState.UNKNOWN for _ in range(self.number_of_sensors)]
+
+        # cancel timers
+        for timer in self.countdown_timers.values():
+            timer.cancel()
+
 
 def main():
     app = TrigEvaluationManager()
