@@ -67,12 +67,9 @@ class SensorHandler:
         self.num_sample_columns = num_sample_columns
         self.num_consecutive_trigs = num_consecutive_trigs
         self.index_counter = 0
-        self.create_log_arrays()  # create log arrays to store log samples
-
-    def create_log_arrays(self):
         self.sensor_log_sample_array = self.create_log_sample_array(self.number_of_sensors, self.num_sample_columns)
         self.consecutive_num_trigs_array = self.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
-        
+
     def register_log_sample(self, sensor_id, value: int, timestamp: int, trig_state: SensorTrigState):
         # check if there are any empty columns to store sample in, otherwise create more columns
         # check for emty columns only when all sensors have stored their data samples (1st sensor_id is 'sensor0'
@@ -139,6 +136,7 @@ class SensorsState(Enum):
     NO_TRIG = 0
     EXACTLY_ONE_TRIG = 1
     ALL_TRIG = 2
+    UNKNOWN = 3
 
 
 class AppLoggingState(Enum):
@@ -164,7 +162,7 @@ class TrigEvaluationManager:
         self.readout_frequency = 1  # Hz [12 Hz = real run mode] 
         self.current_index_counter = 0  # current index of sensor_log_sample_array
         self.next_index_counter = 0     # next index of sensor_log_sample_array 
-        self.num_consecutive_trigs = 5     # [5 - run] number of sensor trigs in a consecutive order to count it as a trig
+        self.num_consecutive_trigs = 5     # 5 (run mode) number of sensor trigs in a consecutive order to count it as a trig
         self.sensor_handler = SensorHandler(self.number_of_sensors, self.initial_num_sample_columns, self.num_consecutive_trigs)
         self.verified_sensor_trig_state = [SensorTrigState.UNKNOWN, SensorTrigState.UNKNOWN]
         self.current_state = AppLoggingState.INIT  # keeps track of current app logging state
@@ -230,7 +228,7 @@ class TrigEvaluationManager:
         print("verified_sensor_trig_state:", [sensor_id.name for sensor_id in self.verified_sensor_trig_state])
 
     def update_sensors_state(self):
-        sensors_state = SensorsState.NO_TRIG
+        sensors_state = SensorsState.UNKNOWN
         if all(s == SensorTrigState.NO_TRIG for s in self.verified_sensor_trig_state):
             sensors_state = SensorsState.NO_TRIG
         elif sum(s == SensorTrigState.TRIG for s in self.verified_sensor_trig_state) == 1:
@@ -243,6 +241,8 @@ class TrigEvaluationManager:
         sensors_state = self.update_sensors_state()
 
         if self.current_state == AppLoggingState.INIT:
+            if self.current_index_counter < self.num_consecutive_trigs - 1:
+                return
             if sensors_state == SensorsState.NO_TRIG:
                 #self.current_state = AppLoggingState.IDLE
                 self.enter_state(AppLoggingState.IDLE)
@@ -256,6 +256,17 @@ class TrigEvaluationManager:
             if sensors_state == SensorsState.ALL_TRIG:
                 #self.current_state = AppLoggingState.LOGGING
                 self.enter_state(AppLoggingState.LOGGING)
+
+            elif sensors_state == SensorsState.EXACTLY_ONE_TRIG:
+                if self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].is_started() == False:
+                    self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].start()    # start timer to timeout if only one sensor is trigged
+
+                if self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].ready():    # if timer finishes, set log stop index
+                    self.enter_state(AppLoggingState.LOG_STOP)
+            
+            else:
+                self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].cancel()    # start timer to timeout if only one sensor is trigged
+
         
         elif self.current_state == AppLoggingState.LOGGING:
             if sensors_state == SensorsState.NO_TRIG:
@@ -279,23 +290,20 @@ class TrigEvaluationManager:
 
     def enter_state(self, new_state):
         if new_state == self.current_state:     # no state change since current state is same as new state
-            return
+           return
         
         self.previous_state = self.current_state
         self.current_state = new_state
 
         if new_state == AppLoggingState.INIT:
-            # clear memory logs
-            pass
+            self.clear_log_memory()     # clear memory logs
         elif new_state == AppLoggingState.IDLE:
             pass
         elif new_state == AppLoggingState.LOG_START:
             self.capture_start_stop_index(SetLogIndex.START)    # set log start index
-            if self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].is_started == False:
-                self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].start()    # start timer to timeout if only one sensor is trigged
-
-            if self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].ready():    # if timer finishes, set log stop index
-                self.capture_start_stop_index(SetLogIndex.STOP)
+            
+            #if self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].ready():    # if timer finishes, set log stop index
+            #    self.capture_start_stop_index(SetLogIndex.STOP)
 
         elif new_state == AppLoggingState.LOGGING:
             self.countdown_timers[SensorsState.EXACTLY_ONE_TRIG].cancel()   # cancel timer if all sensor have been trigged
@@ -335,11 +343,11 @@ class TrigEvaluationManager:
             # Run through the logs from log_break_index + 1 --> log_stop_index and extract the mean value for each of the sensors
             # Then extract which of the sensors that trigged first (and second) in log_part_1 and which sensor that trigged first (and second) in log part_2
             # Validate the trig pattern with expected trig pattern and output ENTRY, EXIT or INVALID as movement direction
-            # TEST TEXT
 
     def clear_log_memory(self):
         self.sensor_trig_arrays = []    # clear the trig array before each log evaluation          
-
+        #self.sensor_handler.consecutive_num_trigs_array = self.sensor_handler.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
+        
 
 def main():
     app = TrigEvaluationManager()
