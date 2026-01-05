@@ -175,9 +175,8 @@ class TrigEvaluationManager:
             SensorsState.EXACTLY_ONE_TRIG: CountdownTimer(self.log_started_timeout),  # timeout if only one sensor triggers
             SensorsState.NO_TRIG: CountdownTimer(self.log_finished_timeout), # timeout before evaluate logs after sensors all sensors are unblocked (NO_TRIG)
         }
-        self.log_evalution_is_done = False
         self.sensor_trig_arrays = []
-
+        self.sensor_mean_values = []
 
     def run(self):
         for sensor_id in range(self.number_of_sensors):
@@ -324,6 +323,8 @@ class TrigEvaluationManager:
             print("log_stop_index:", self.log_stop_index)
 
     def evaluate_logs(self, start_index, stop_index):
+        self.sensor_trig_arrays = []    # clear list to avoid list growth
+        self.sensor_mean_values = []    # clear list to avoid list growth
         # create array to store log samples when sensor is trigged for each of the sensors
         for sensor_id, sensor in enumerate(self.sensors):
             sensor_trigs = []
@@ -332,11 +333,35 @@ class TrigEvaluationManager:
                 if sample.trig_state == SensorTrigState.TRIG:
                     sensor_trigs.append(sample)
 
-            self.sensor_trig_arrays.append(sensor_trigs) 
-            print("sensor_id:", sensor_id)
-            for sample in sensor_trigs:
-                print(sample.trig_state.name, sample.timestamp) 
+            self.sensor_trig_arrays.append(sensor_trigs)    # store trigs for each sensor_id 
 
+        for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays):
+            sum = 0
+            counter = 0
+            mean_value = 0
+            for sample in sensor_samples:
+                sum += sample.timestamp 
+                counter += 1
+            # calculate timestamp mean value for each sensor
+            if counter > 0:
+                mean_value = sum / counter
+            else:
+                None
+            # store sensor trig mean value for each sensor, sensor_id is represented of index position in list
+            self.sensor_mean_values.append(mean_value)
+            print("sensor_id:", sensor_id, "mean_value", mean_value)
+        print("sensor_mean_values:", self.sensor_mean_values)
+        
+        print("sensor_trig_arrays:")
+        for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays):
+            print(f"sensor_id {sensor_id}")
+            for sample in sensor_samples:
+                print(sample.trig_state.name, sample.timestamp)
+
+        
+
+        
+     
             # Go through the logs, analyse to find index when both sensors are trigged at the same time for minimum num_consecutive_trigs. 
             # Store the index in as log_break_index of when both sensors was trigged for first series (in case there are more than one series)
             # Run through the logs from log_start_index --> log_break_index and extract the mean value for each of the sensors
