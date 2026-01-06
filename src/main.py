@@ -189,6 +189,9 @@ class TrigEvaluationManager:
         }
         self.sensor_trig_arrays = []
         self.sensor_mean_values = []
+        self.first_trig_sensor_id = None    # stores and in value referring to sensor_id of the sensor that trigged first
+        self.latest_trig_timestamp = 0      # the latest/highest timestamp of any of the sensors that trigged
+        self.identified_movement_direction = []
 
     def run(self):
         for sensor_id in range(self.number_of_sensors):
@@ -254,13 +257,22 @@ class TrigEvaluationManager:
         if self.current_state == AppLoggingState.INIT:
             if self.current_index_counter < self.num_consecutive_trigs - 1:
                 return
+            
             if sensors_state == SensorsState.NO_TRIG:
                 #self.current_state = AppLoggingState.IDLE
                 self.enter_state(AppLoggingState.IDLE)
         
         elif self.current_state == AppLoggingState.IDLE:
-            if sensors_state == SensorsState.EXACTLY_ONE_TRIG or sensors_state == SensorsState.ALL_TRIG:
+            if sensors_state == SensorsState.EXACTLY_ONE_TRIG:
+                # Detect which sensor triggered first
+                self.first_trig_sensor_id = self.verified_sensor_trig_state.index(SensorTrigState.TRIG)
+                print("First triggered sensor:", self.first_trig_sensor_id)
+                self.enter_state(AppLoggingState.LOG_START)
+
+            elif sensors_state == SensorsState.ALL_TRIG:
+                self.first_trig_sensor_id = None
                 #self.current_state = AppLoggingState.LOG_START
+                print("First triggered sensor:", self.first_trig_sensor_id)
                 self.enter_state(AppLoggingState.LOG_START)
         
         elif self.current_state == AppLoggingState.LOG_START:
@@ -354,6 +366,9 @@ class TrigEvaluationManager:
             for sample in sensor_samples:
                 sum += sample.timestamp 
                 counter += 1
+                # extract the latest trig timestamp
+                if sample.timestamp > self.latest_trig_timestamp:
+                    self.latest_trig_timestamp = sample.timestamp
             # calculate timestamp mean value for each sensor
             if counter > 0:
                 mean_value = sum / counter
@@ -361,7 +376,6 @@ class TrigEvaluationManager:
                 None
             # store sensor trig mean value for each sensor, sensor_id is represented of index position in list
             self.sensor_mean_values.append(mean_value)
-            print("sensor_id:", sensor_id, "mean_value", mean_value)
         print("sensor_mean_values:", self.sensor_mean_values)
         
         print("sensor_trig_arrays:")
@@ -373,40 +387,47 @@ class TrigEvaluationManager:
 
         print("movement_direction:", self.detect_movement_direction())
 
-            # Go through the logs, analyse to find index when both sensors are trigged at the same time for minimum num_consecutive_trigs. 
-            # Store the index in as log_break_index of when both sensors was trigged for first series (in case there are more than one series)
-            # Run through the logs from log_start_index --> log_break_index and extract the mean value for each of the sensors
-            # Run through the logs from log_break_index + 1 --> log_stop_index and extract the mean value for each of the sensors
-            # Then extract which of the sensors that trigged first (and second) in log_part_1 and which sensor that trigged first (and second) in log part_2
-            # Validate the trig pattern with expected trig pattern and output ENTRY, EXIT or INVALID as movement direction
-
     def detect_movement_direction(self):
         """
         Determines ENTRY / EXIT / INVALID based on sensor mean timestamps.
         Assumes exactly 2 sensors.
         """
+        self.identified_movement_direction.append(self.latest_trig_timestamp)   # add latest verified_sensor_trig timestamp
         if len(self.sensor_mean_values) != 2:
-            return MovementDirection.INVALID
+            self.identified_movement_direction.append(MovementDirection.INVALID)
+            #return MovementDirection.INVALID
 
         t0, t1 = self.sensor_mean_values
 
         # If one or both sensors never triggered
         if t0 == 0 or t1 == 0:
-            return MovementDirection.INVALID
+            self.identified_movement_direction.append(MovementDirection.INVALID)
+            #return MovementDirection.INVALID
 
         # Same timestamp → ambiguous
         if abs(t0 - t1) < 1e-6:
-            return MovementDirection.INVALID
+            self.identified_movement_direction.append(MovementDirection.INVALID)
+            #return MovementDirection.INVALID
 
         if t0 < t1:
-            return MovementDirection.EXIT
+            if self.first_trig_sensor_id == 0:  # verify that that aligns with the identified movement direction was trigged first 
+                self.identified_movement_direction.append(MovementDirection.EXIT)
+                #return MovementDirection.EXIT
         else:
-            return MovementDirection.ENTRY          
+            if self.first_trig_sensor_id == 1:  # verify that that aligns with the identified movement direction was trigged first 
+                self.identified_movement_direction.append(MovementDirection.ENTRY)
+                #return MovementDirection.ENTRY   
+       
+        return self.identified_movement_direction
 
     def clear_log_memory(self):
         # reset sensor handler buffers
         self.sensor_handler.reset()
         
+        # reset variables
+        self.first_trig_sensor_id = None
+        self.latest_trig_timestamp = 0
+
         # reset counters
         self.current_index_counter = 0
         self.next_index_counter = 0
@@ -418,6 +439,7 @@ class TrigEvaluationManager:
         # clear evaluation results
         self.sensor_trig_arrays = []
         self.sensor_mean_values = []
+        self.identified_movement_direction = []
 
         # reset verified trig states
         self.verified_sensor_trig_state = [SensorTrigState.UNKNOWN for _ in range(self.number_of_sensors)]
