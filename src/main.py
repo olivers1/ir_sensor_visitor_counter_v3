@@ -349,16 +349,13 @@ class TrigEvaluationManager:
     def evaluate_logs(self, start_index, stop_index):
         self.sensor_trig_arrays = []    # clear list to avoid list growth
         self.sensor_mean_values = []    # clear list to avoid list growth
-        # create array to store log samples when sensor is trigged for each of the sensors
-        for sensor_id, sensor in enumerate(self.sensors):
-            sensor_trigs = []
-            for index in range(start_index, stop_index):
-                sample = self.sensor_handler.get_log_sample(sensor_id, index)
-                if sample.trig_state == SensorTrigState.TRIG:
-                    sensor_trigs.append(sample)
+        
+        # extract sensor trigs and store in a list containing the trigs as sublists for each sensor
+        self._extract_sensor_trigs(start_index, stop_index)
+        self._compute_sensor_means()
+        print("movement_direction:", self.detect_movement_direction())
 
-            self.sensor_trig_arrays.append(sensor_trigs)    # store trigs for each sensor_id 
-
+    def _compute_sensor_means(self):
         for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays):
             sum = 0
             counter = 0
@@ -376,16 +373,25 @@ class TrigEvaluationManager:
                 None
             # store sensor trig mean value for each sensor, sensor_id is represented of index position in list
             self.sensor_mean_values.append(mean_value)
-        print("sensor_mean_values:", self.sensor_mean_values)
-        
+
         print("sensor_trig_arrays:")
         for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays):
             print(f"sensor_id {sensor_id}")
             for sample in sensor_samples:
                 print(sample.trig_state.name, sample.timestamp)
-        
 
-        print("movement_direction:", self.detect_movement_direction())
+        print("sensor_mean_values:", self.sensor_mean_values)
+
+    def _extract_sensor_trigs(self, start_index, stop_index):
+        for sensor_id, sensor in enumerate(self.sensors):
+            sensor_trigs = []
+            for index in range(start_index, stop_index):
+                sample = self.sensor_handler.get_log_sample(sensor_id, index)
+                if sample.trig_state == SensorTrigState.TRIG:
+                    sensor_trigs.append(sample)
+
+            self.sensor_trig_arrays.append(sensor_trigs)    # store trigs for each sensor_id 
+
 
     def detect_movement_direction(self):
         """
@@ -417,7 +423,7 @@ class TrigEvaluationManager:
             if self.first_trig_sensor_id == 1:  # verify that that aligns with the identified movement direction was trigged first 
                 self.identified_movement_direction.append(MovementDirection.ENTRY)
                 #return MovementDirection.ENTRY   
-       
+        #print("movement_direction:", self.detect_movement_direction())
         return self.identified_movement_direction
 
     def clear_log_memory(self):
