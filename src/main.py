@@ -9,6 +9,7 @@ import pwmio
 from enum import Enum
 import numpy as np
 import logging
+from logging.handlers import RotatingFileHandler
 
 
 # IO-pin setup for IR-leds with pwm output signal
@@ -25,15 +26,32 @@ filename_debug = "debug.log"
 filename_info = "info.log"
 # logging handlers
 console = logging.StreamHandler()
-file_handler_debug = logging.FileHandler(filename_debug, mode='w', encoding='utf-8')
+console.setLevel(logging.INFO)
+
+#file_handler_debug = logging.FileHandler(filename_debug, mode='w', encoding='utf-8')
+file_handler_debug = RotatingFileHandler(
+    "debug.log",
+    mode="w",              # overwrite after rotation
+    maxBytes= 5 * 1024 * 1024,  # 5 MB
+    backupCount=5,         # keep 5 old file
+    encoding="utf-8"
+)
 file_handler_debug.setLevel(logging.DEBUG)
-file_handler_info = logging.FileHandler(filename_info, mode='w', encoding='utf-8')
+
+file_handler_info = RotatingFileHandler(
+    filename_info,
+    mode='a',                  # append mode
+    maxBytes=5 * 1024 * 1024,  # 5 MB max
+    backupCount=1,             # keep 1 old files
+    encoding='utf-8'
+)
+file_handler_info = logging.FileHandler(filename_info, mode='a', encoding='utf-8')
 file_handler_info.setLevel(logging.INFO)
 # logging config
 logging.basicConfig(
     level=logging.DEBUG, handlers=[console, file_handler_debug, file_handler_info],
     style="{",
-    format="{asctime}.{msecs:03.0f} - {funcName} - {levelname}: {message}",
+    format="{asctime} - {funcName} - {levelname}: {message}",
     )
 
 class SensorTrigState(Enum):
@@ -88,6 +106,7 @@ class SensorHandler:
 
     def reset(self):
         """Clear all logged samples and counters."""
+        logging.info("All logged samples and counters cleared")
         self.index_counter = 0
         self.sensor_log_sample_array = self.create_log_sample_array(self.number_of_sensors, self.num_sample_columns)
         self.consecutive_num_trigs_array = self.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
@@ -193,6 +212,7 @@ class TrigEvaluationManager:
         self.num_consecutive_trigs = 5     # 5 (run mode) number of sensor trigs in a consecutive order to count it as a trig
         self.sensor_handler = SensorHandler(self.number_of_sensors, self.initial_num_sample_columns, self.num_consecutive_trigs)
         self.verified_sensor_trig_state = [SensorTrigState.UNKNOWN, SensorTrigState.UNKNOWN]
+        self.prev_verified_sensor_trig_state = [SensorTrigState.UNKNOWN, SensorTrigState.UNKNOWN]
         self.current_state = AppLoggingState.INIT  # keeps track of current app logging state
         self.previous_state = AppLoggingState.INIT  # keeps track of the previous app logging state
         self.log_start_index = 0     # index at sensor_log_sample_array when logging is started
@@ -220,8 +240,10 @@ class TrigEvaluationManager:
                 self.current_index_counter = self.next_index_counter - 1
 
             for sensor_id, sensor in enumerate(self.sensors):
-                print(f"(sensor_id, current_index_counter: {sensor_id}, {self.current_index_counter})") 
-                print(self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).value, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).timestamp, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).trig_state.name)
+                logging.debug("sensor_id, list_index: (%d, %d)", sensor_id, self.current_index_counter)
+                logging.debug("%s | %d | %d", self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).trig_state.name, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).timestamp, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).value)
+                #print(f"(sensor_id, current_index_counter: {sensor_id}, {self.current_index_counter})") 
+                #print(self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).value, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).timestamp, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).trig_state.name)
                     
             time.sleep(1/self.readout_frequency) # setting periodic time for the sensor read
             
@@ -231,7 +253,7 @@ class TrigEvaluationManager:
             
             self.update_logging_state()
             #print("current_state:", self.current_state.name)
-            logging.info("current_state: %s", self.current_state.name)
+            logging.debug("current_state: %s", self.current_state.name)
 
     def verify_sensor_trig_states(self):
         # add samples to consecutive_num_trigs_array
@@ -241,8 +263,10 @@ class TrigEvaluationManager:
             
         for list_index in range(self.num_consecutive_trigs):
             for sensor_id in range(self.number_of_sensors):
-                print(f"(sensor_id, list_index: {sensor_id}, {list_index})") 
-                print(self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).timestamp, self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).trig_state.name)
+                logging.debug("sensor_id, list_index: (%d, %d)", sensor_id, list_index)
+                logging.debug("%s | %d ", self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).trig_state.name, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).timestamp)
+                #print(f"(sensor_id, list_index: {sensor_id}, {list_index})") 
+                #print(self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).timestamp, self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).trig_state.name)
             
         # check if trig state is stable by verifying that all elements in a row only have the same trig state. Independtly of what trig state the other row have
         trig_states = np.array([[sample.trig_state.name for sample in row] for row in self.sensor_handler.consecutive_num_trigs_array])
@@ -256,7 +280,15 @@ class TrigEvaluationManager:
                 self.verified_sensor_trig_state.append(self.sensor_handler.consecutive_num_trigs_array[sensor_id][0].trig_state)
             elif is_stable == False:
                 self.verified_sensor_trig_state.append(SensorTrigState.UNKNOWN) 
-        print("verified_sensor_trig_state:", [sensor_id.name for sensor_id in self.verified_sensor_trig_state])
+        
+        new_state = self.verified_sensor_trig_state
+
+        if new_state != self.prev_verified_sensor_trig_state:
+            logging.info("verified_sensor_trig_state Transition: %s → %s", [sensor_id.name for sensor_id in self.prev_verified_sensor_trig_state] , [sensor_id.name for sensor_id in new_state])
+            self.prev_verified_sensor_trig_state = new_state.copy()
+
+        #logging.info("%s", [sensor_id.name for sensor_id in self.verified_sensor_trig_state])
+        #print("verified_sensor_trig_state:", [sensor_id.name for sensor_id in self.verified_sensor_trig_state])
 
     def update_sensors_state(self):
         sensors_state = SensorsState.UNKNOWN
@@ -283,13 +315,14 @@ class TrigEvaluationManager:
             if sensors_state == SensorsState.EXACTLY_ONE_TRIG:
                 # Detect which sensor triggered first
                 self.first_trig_sensor_id = self.verified_sensor_trig_state.index(SensorTrigState.TRIG)
-                print("First triggered sensor:", self.first_trig_sensor_id)
+                
+                #print("First triggered sensor:", self.first_trig_sensor_id)
                 self.enter_state(AppLoggingState.LOG_START)
 
             elif sensors_state == SensorsState.ALL_TRIG:
                 self.first_trig_sensor_id = None
                 #self.current_state = AppLoggingState.LOG_START
-                print("First triggered sensor:", self.first_trig_sensor_id)
+                #print("First triggered sensor:", self.first_trig_sensor_id)
                 self.enter_state(AppLoggingState.LOG_START)
         
         elif self.current_state == AppLoggingState.LOG_START:
@@ -320,6 +353,7 @@ class TrigEvaluationManager:
                 self.countdown_timers[SensorsState.NO_TRIG].cancel()
         
         elif self.current_state == AppLoggingState.LOG_STOP:
+            logging.info("first_trig_sensor_id: %s", self.first_trig_sensor_id)
             self.enter_state(AppLoggingState.LOG_EVALUATION)
 
         elif self.current_state == AppLoggingState.LOG_EVALUATION:
@@ -329,7 +363,7 @@ class TrigEvaluationManager:
         if new_state == self.current_state:     # no state change since current state is same as new state
            return
         
-        logging.info("STATE TRANSITION: %s → %s",
+        logging.info("AppLoggingState Transition: %s → %s",
             self.current_state.name,
             new_state.name)
         
@@ -359,10 +393,12 @@ class TrigEvaluationManager:
         # capture sample index when app logging is set to start and stop respectively
         if action == SetLogIndex.START:
             self.log_start_index = self.next_index_counter - self.num_consecutive_trigs   # adjust index to the first sample when sensor was firstly trigged
-            print("log_start_index:", self.log_start_index)
+            logging.info("log_start_index: %d", self.log_start_index)
+            #print("log_start_index:", self.log_start_index)
         elif action == SetLogIndex.STOP:
             self.log_stop_index = self.next_index_counter
-            print("log_stop_index:", self.log_stop_index)
+            logging.info("log_stop_index: %d", self.log_stop_index)
+            #print("log_stop_index:", self.log_stop_index)
 
     def evaluate_logs(self, start_index, stop_index):
         self.sensor_trig_arrays = []    # clear list to avoid list growth
@@ -371,7 +407,7 @@ class TrigEvaluationManager:
         # extract sensor trigs and store in a list containing the trigs as sublists for each sensor
         self._extract_sensor_trigs(start_index, stop_index)
         self._compute_sensor_means()
-        self.detect_movement_direction()
+        self._detect_movement_direction()
 
     def _compute_sensor_means(self):
         for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays):
@@ -391,14 +427,18 @@ class TrigEvaluationManager:
                 None
             # store sensor trig mean value for each sensor, sensor_id is represented of index position in list
             self.sensor_mean_values.append(mean_value)
-
+    
         print("sensor_trig_arrays:")
         for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays):
-            print(f"sensor_id {sensor_id}")
+            logging.debug("sensor %d trig timestamps:", sensor_id)
+            #print(f"sensor_id {sensor_id}")
             for sample in sensor_samples:
-                print(sample.trig_state.name, sample.timestamp)
+                logging.debug("%s | %d", sample.trig_state.name, sample.timestamp)
+                #print(sample.trig_state.name, sample.timestamp)
 
-        print("sensor_mean_values:", self.sensor_mean_values)
+        for sensor_id, mean in enumerate(self.sensor_mean_values):
+            logging.info("sensor %d mean timestamp: %.3f", sensor_id, mean)
+        #print("sensor_mean_values:", self.sensor_mean_values)
 
     def _extract_sensor_trigs(self, start_index, stop_index):
         for sensor_id, sensor in enumerate(self.sensors):
@@ -411,7 +451,7 @@ class TrigEvaluationManager:
             self.sensor_trig_arrays.append(sensor_trigs)    # store trigs for each sensor_id 
 
 
-    def detect_movement_direction(self):
+    def _detect_movement_direction(self):
         """
         Determines ENTRY / EXIT / INVALID based on sensor mean timestamps.
         Assumes exactly 2 sensors.
