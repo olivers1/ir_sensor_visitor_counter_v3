@@ -205,11 +205,11 @@ class TrigEvaluationManager:
         self.number_of_sensors = 2
         self.sensors = []   # list containing all sensors
         self.initial_num_sample_columns = 1000  # specifies number of columns for the initial log array
-        self.readout_frequency = 8  # Hz (8 Hz in run mode] 
+        self.readout_frequency = 12  # Hz (12 Hz in run mode) 
         self.max_index_counter = 10000  # maximum number of colums (length) om sample array
         self.current_index_counter = 0  # current index of sensor_log_sample_array
         self.next_index_counter = 0     # next index of sensor_log_sample_array 
-        self.num_consecutive_trigs = 5     # 5 (run mode) number of sensor trigs in a consecutive order to count it as a trig
+        self.num_consecutive_trigs = 5     # columns (5 columns in run mode) number of sensor trigs in a consecutive order to count it as a trig
         self.sensor_handler = SensorHandler(self.number_of_sensors, self.initial_num_sample_columns, self.num_consecutive_trigs)
         self.verified_sensor_trig_state = [SensorTrigState.UNKNOWN, SensorTrigState.UNKNOWN]
         self.prev_verified_sensor_trig_state = [SensorTrigState.UNKNOWN, SensorTrigState.UNKNOWN]
