@@ -40,12 +40,11 @@ file_handler_debug.setLevel(logging.DEBUG)
 
 file_handler_info = RotatingFileHandler(
     filename_info,
-    mode='a',                  # append mode
+    mode='w',                  # overwrite after rotation
     maxBytes=5 * 1024 * 1024,  # 5 MB max
     backupCount=1,             # keep 1 old files
     encoding='utf-8'
 )
-file_handler_info = logging.FileHandler(filename_info, mode='a', encoding='utf-8')
 file_handler_info.setLevel(logging.INFO)
 # logging config
 logging.basicConfig(
@@ -102,14 +101,14 @@ class SensorHandler:
         self.num_consecutive_trigs = num_consecutive_trigs
         self.index_counter = 0
         self.sensor_log_sample_array = self.create_log_sample_array(self.number_of_sensors, self.num_sample_columns)
-        self.consecutive_num_trigs_array = self.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
+        self.consecutive_trigs_array = self.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
 
     def reset(self):
         """Clear all logged samples and counters."""
         logging.info("All logged samples and counters cleared")
         self.index_counter = 0
         self.sensor_log_sample_array = self.create_log_sample_array(self.number_of_sensors, self.num_sample_columns)
-        self.consecutive_num_trigs_array = self.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
+        self.consecutive_trigs_array = self.create_log_sample_array(self.number_of_sensors, self.num_consecutive_trigs)
 
     def register_log_sample(self, sensor_id, value: int, timestamp: int, trig_state: SensorTrigState):
         # check if there are any empty columns to store sample in, otherwise create more columns
@@ -137,11 +136,11 @@ class SensorHandler:
     def get_sensor_log_sample_array(self):
         return self.sensor_log_sample_array
     
-    def get_element_consecutive_num_trigs_array(self, sensor_id, sample_index):
-        return self.consecutive_num_trigs_array[sensor_id][sample_index]
+    def get_element_consecutive_trigs_array(self, sensor_id, sample_index):
+        return self.consecutive_trigs_array[sensor_id][sample_index]
     
-    def get_consecutive_num_trigs_array(self):
-        return self.consecutive_num_trigs_array
+    def get_consecutive_trigs_array(self):
+        return self.consecutive_trigs_array
 
 
 class CountdownTimer:
@@ -206,7 +205,7 @@ class TrigEvaluationManager:
         self.number_of_sensors = 2
         self.sensors = []   # list containing all sensors
         self.initial_num_sample_columns = 1000  # specifies number of columns for the initial log array
-        self.readout_frequency = 5  # Hz (8 Hz in run mode] 
+        self.readout_frequency = 8  # Hz (8 Hz in run mode] 
         self.max_index_counter = 10000  # maximum number of colums (length) om sample array
         self.current_index_counter = 0  # current index of sensor_log_sample_array
         self.next_index_counter = 0     # next index of sensor_log_sample_array 
@@ -244,8 +243,6 @@ class TrigEvaluationManager:
             for sensor_id, sensor in enumerate(self.sensors):
                 logging.debug("sensor_id, list_index: (%d, %d)", sensor_id, self.current_index_counter)
                 logging.debug("%s | %d | %d", self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).trig_state.name, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).timestamp, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).value)
-                #print(f"(sensor_id, current_index_counter: {sensor_id}, {self.current_index_counter})") 
-                #print(self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).value, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).timestamp, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).trig_state.name)
                     
             time.sleep(1/self.readout_frequency) # setting periodic time for the sensor read
             
@@ -258,20 +255,18 @@ class TrigEvaluationManager:
             logging.debug("current_state: %s", self.current_state.name)
 
     def verify_sensor_trig_states(self):
-        # add samples to consecutive_num_trigs_array
+        # add samples to consecutive_trigs_array
         for sensor_id in range(self.number_of_sensors):
             for list_index in range(self.num_consecutive_trigs):
-                self.sensor_handler.consecutive_num_trigs_array[sensor_id][list_index] = self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter - ((self.num_consecutive_trigs - 1) - list_index))
-            
+                self.sensor_handler.consecutive_trigs_array[sensor_id][list_index] = self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter - ((self.num_consecutive_trigs - 1) - list_index))
+  
         for list_index in range(self.num_consecutive_trigs):
             for sensor_id in range(self.number_of_sensors):
-                logging.debug("sensor_id, list_index: (%d, %d)", sensor_id, list_index)
-                logging.debug("%s | %d ", self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).trig_state.name, self.sensor_handler.get_log_sample(sensor_id, self.current_index_counter).timestamp)
-                #print(f"(sensor_id, list_index: {sensor_id}, {list_index})") 
-                #print(self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).timestamp, self.sensor_handler.get_element_consecutive_num_trigs_array(sensor_id, list_index).trig_state.name)
-            
+                logging.debug(f"sensor_id, list_index: ({sensor_id}, {list_index})")
+                logging.debug(f"{self.sensor_handler.get_element_consecutive_trigs_array(sensor_id, list_index).trig_state.name} | {self.sensor_handler.get_element_consecutive_trigs_array(sensor_id, list_index).timestamp} | {self.sensor_handler.get_element_consecutive_trigs_array(sensor_id, list_index).value}") 
+                
         # check if trig state is stable by verifying that all elements in a row only have the same trig state. Independtly of what trig state the other row have
-        trig_states = np.array([[sample.trig_state.name for sample in row] for row in self.sensor_handler.consecutive_num_trigs_array])
+        trig_states = np.array([[sample.trig_state.name for sample in row] for row in self.sensor_handler.consecutive_trigs_array])
         row_check = np.all(trig_states == trig_states[:, [0]], axis=1)
         #print(row_check)
 
@@ -279,10 +274,10 @@ class TrigEvaluationManager:
         self.verified_sensor_trig_state = []    # clear array at each iteration to only store current trig state for the sensors
         for sensor_id, is_stable in enumerate(row_check):
             if is_stable == True:
-                self.verified_sensor_trig_state.append(self.sensor_handler.consecutive_num_trigs_array[sensor_id][0].trig_state)
+                self.verified_sensor_trig_state.append(self.sensor_handler.consecutive_trigs_array[sensor_id][0].trig_state)
             elif is_stable == False:
                 self.verified_sensor_trig_state.append(SensorTrigState.UNKNOWN) 
-        
+        logging.debug("verified_sensor_trig_state: %s", [sensor_id.name for sensor_id in self.prev_verified_sensor_trig_state])
         new_state = self.verified_sensor_trig_state
 
         if new_state != self.prev_verified_sensor_trig_state:
@@ -355,7 +350,7 @@ class TrigEvaluationManager:
             elif sensors_state == SensorsState.EXACTLY_ONE_TRIG:
                 self.countdown_timers[SensorsState.NO_TRIG].cancel()
             
-            elif sensors_state == sensors_state == SensorsState.ALL_TRIG:
+            elif sensors_state == SensorsState.ALL_TRIG:
                 self.all_sensors_trigged_simultaniously = True  # both sensors were trigged at same time any time during the logging
                 self.countdown_timers[SensorsState.NO_TRIG].cancel()
         
