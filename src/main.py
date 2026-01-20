@@ -10,6 +10,9 @@ from enum import Enum
 import numpy as np
 import logging
 from logging.handlers import RotatingFileHandler
+import mariadb
+import sys
+from secrets import db_user, db_password, db_name
 
 
 # IO-pin setup for IR-leds with pwm output signal
@@ -209,7 +212,7 @@ class TrigEvaluationManager:
         self.max_index_counter = 10000  # maximum number of colums (length) om sample array
         self.current_index_counter = 0  # current index of sensor_log_sample_array
         self.next_index_counter = 0     # next index of sensor_log_sample_array 
-        self.num_consecutive_trigs = 5     # columns (5 columns in run mode) number of sensor trigs in a consecutive order to count it as a trig
+        self.num_consecutive_trigs = 4     # columns (5 columns in run mode) number of sensor trigs in a consecutive order to count it as a trig
         self.sensor_handler = SensorHandler(self.number_of_sensors, self.initial_num_sample_columns, self.num_consecutive_trigs)
         self.verified_sensor_trig_state = [SensorTrigState.UNKNOWN, SensorTrigState.UNKNOWN]
         self.prev_verified_sensor_trig_state = [SensorTrigState.UNKNOWN, SensorTrigState.UNKNOWN]
@@ -251,7 +254,6 @@ class TrigEvaluationManager:
                 self.verify_sensor_trig_states()
             
             self.update_logging_state()
-            #print("current_state:", self.current_state.name)
             logging.debug("current_state: %s", self.current_state.name)
 
     def verify_sensor_trig_states(self):
@@ -409,6 +411,7 @@ class TrigEvaluationManager:
         self._extract_sensor_trigs(start_index, stop_index)
         self._compute_sensor_means()
         self._detect_movement_direction()
+        self._write_to_database()
 
     def _compute_sensor_means(self):
         for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays):
@@ -437,7 +440,7 @@ class TrigEvaluationManager:
                 logging.debug("%s | %d", sample.trig_state.name, sample.timestamp)
 
         for sensor_id, mean in enumerate(self.sensor_mean_values):
-            logging.info("sensor %d mean timestamp: %.3f", sensor_id, mean)
+            logging.info("sensor%d mean timestamp: %.3f", sensor_id, mean)
 
     def _extract_sensor_trigs(self, start_index, stop_index):
         for sensor_id, sensor in enumerate(self.sensors):
@@ -481,7 +484,6 @@ class TrigEvaluationManager:
             logging.info("%s: sensors were never trigged at same time, anytime during logging", self.identified_movement_direction)
             return self.identified_movement_direction
 
-
         # direction determination
         if t0 < t1:
             expected_first = 0
@@ -499,6 +501,33 @@ class TrigEvaluationManager:
             logging.info("%s: detected movement direction", self.identified_movement_direction)
         
         return self.identified_movement_direction
+    
+    def _write_to_database(self):
+        # Connect to MariaDB Platform
+        try:
+            conn = mariadb.connect(
+                user=db_user,
+                password=db_password,
+                host="localhost",
+                port=3306,
+                database=db_name
+            )
+        except mariadb.Error as e:
+            logging.error("error connecting to MariaDB platform. %s", e)
+            sys.exit(1)
+
+        # Get Cursor
+        cur = conn.cursor()
+
+        # write to database
+        cur.execute(
+            "INSERT INTO observations (timestamp, movement_direction) VALUES (?, ?)",
+            (self.identified_movement_direction[0], self.identified_movement_direction[1].name))
+        conn.commit()
+        logging.info("identified movement direction successfully stored in mysql database")
+
+        # Close Connection
+        conn.close()
 
     def clear_log_memory(self):
         # reset sensor handler buffers
