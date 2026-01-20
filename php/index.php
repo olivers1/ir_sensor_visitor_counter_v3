@@ -3,14 +3,56 @@
 <head>
 <style>
     td, th {
-        border: 1px solid black;
-        padding: 10px;
+        border: 0.5px solid black;
+        padding: 6px;
         text-align: center;
+        font-family: helvetica;
+        font-size: 14px;
+    }
+
+    /* Container for ASCII cat + title */
+    .header-container {
+        display: flex;
+        align-items: center; /* vertically center title with cat */
+        justify-content: left; /* align left */
+    }
+
+    /* ASCII cat styling */
+    .ascii-cat {
+        font-family: monospace;
+        margin-right: 20px; /* space between cat and title */
+        line-height: 1; /* tight spacing for ASCII art */
+    }
+
+    /* Title styling */
+    h1 {
+        font-family: helvetica;
+        margin: 0; /* remove default margin */
+    }
+
+    /* Date/time display styling */
+    #current-datetime {
+        font-family: helvetica;
+        font-size: 14px;
+        margin-left: 5px;
+        margin-bottom: 2px;
     }
 </style>
 </head>
 
 <body>
+
+<div class="header-container">
+    <pre class="ascii-cat">
+ /\_/\  
+( o.o ) 
+ > ^ <
+    </pre>
+    <h1>Cat ObServer</h1>
+</div>
+
+<!-- Current date/time display just above the table -->
+<div id="current-datetime"></div>
 
 <table>
     <thead>
@@ -35,20 +77,20 @@ async function loadData() {
         tbody.innerHTML = '';
 
         data.forEach(row => {
-            const timestamp = Number(row.timestamp); // ensure it’s a number
+            const timestamp = Number(row.timestamp);
 
             let formattedDate = '';
             if (!isNaN(timestamp)) {
-                const date = new Date(timestamp); // timestamp is in milliseconds
-                formattedDate = date.toLocaleString(); // human-readable
+                const date = new Date(timestamp);
+                formattedDate = date.toLocaleString();
             } else {
                 console.warn('Invalid timestamp:', row.timestamp);
             }
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${row.timestamp}</td> <!-- original timestamp -->
-                <td>${formattedDate}</td> <!-- converted date-time -->
+                <td>${row.timestamp}</td>
+                <td>${formattedDate}</td>
                 <td>${row.movement_direction}</td>
             `;
 
@@ -59,10 +101,16 @@ async function loadData() {
     }
 }
 
-// Load immediately
-loadData();
+// Update current date and time every second
+function updateDateTime() {
+    const now = new Date();
+    document.getElementById('current-datetime').textContent = now.toLocaleString();
+}
 
-// Refresh every 5 seconds
+updateDateTime();
+setInterval(updateDateTime, 1000);
+
+loadData();
 setInterval(loadData, 5000);
 </script>
 
