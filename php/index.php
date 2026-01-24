@@ -31,12 +31,13 @@
     }
 
     /* Date/time display styling */
-    #current-datetime {
+    #current-datetime, #excursions-count, #status-location, #status-updated {
         font-family: helvetica;
         font-size: 14px;
         margin-left: 5px;
         margin-bottom: 2px;
     }
+
 </style>
 </head>
 
@@ -51,8 +52,16 @@
     <h1>Cat ObServer</h1>
 </div>
 
+<div id="status-location"></div>
+<div id="status-updated"></div>
+<div id="excursions-count"></div>
+<br>
+
 <!-- Current date/time display just above the table -->
-<div id="current-datetime"></div>
+<div id="current-datetime">
+    Time now: <span id="current-time"></span>
+</div>
+
 
 <table>
     <thead>
@@ -73,12 +82,24 @@ async function loadData() {
         const response = await fetch('fetch_observations.php');
         const data = await response.json();
 
+        const observations = data.observations;
+        const excursions = data.excursions;
+        const statusLocation = data.statusLocation;
+        const statusUpdated = data.statusUpdated;
+
+        // Display excursions count
+        document.getElementById('excursions-count').textContent = `Total excursions: ${excursions}`;
+
+        // Display location status
+        document.getElementById('status-location').textContent = `Status: ${statusLocation}`;
+        // Display status updated time
+        document.getElementById('status-updated').textContent = `Updated: ${statusUpdated}`;
+
         const tbody = document.getElementById('table-body');
         tbody.innerHTML = '';
 
-        data.forEach(row => {
+        observations.forEach(row => {
             const timestamp = Number(row.timestamp);
-
             let formattedDate = '';
             if (!isNaN(timestamp)) {
                 const date = new Date(timestamp);
@@ -94,8 +115,8 @@ async function loadData() {
                 <td>${row.movement_direction}</td>
             `;
 
-            tbody.appendChild(tr);
-        });
+        tbody.appendChild(tr);
+    });
     } catch (err) {
         console.error('Failed to load data', err);
     }
