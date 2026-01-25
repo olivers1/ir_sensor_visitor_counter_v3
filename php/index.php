@@ -31,7 +31,7 @@
     }
 
     /* Date/time display styling */
-    #current-datetime, #excursions-count, #status-location, #status-updated {
+    #current-datetime, #excursions-count, #status-location, #status-updated, #excursions-today, #time-outside-today {
         font-family: helvetica;
         font-size: 14px;
         margin-left: 5px;
@@ -54,6 +54,9 @@
 
 <div id="status-location"></div>
 <div id="status-updated"></div>
+<div id="excursions-today"></div>
+<div id="time-outside-today"></div>
+<br>
 <div id="excursions-count"></div>
 <br>
 
@@ -86,6 +89,11 @@ async function loadData() {
         const excursions = data.excursions;
         const statusLocation = data.statusLocation;
         const statusUpdated = data.statusUpdated;
+        const formattedStatusUpdated = formatTimestamp(statusUpdated, {
+            fallback: 'Unknown'
+        });
+        const excursionsToday = data.excursionsToday;
+        const timeOutsideToday = data.timeOutsideToday;
 
         // Display excursions count
         document.getElementById('excursions-count').textContent = `Total excursions: ${excursions}`;
@@ -93,20 +101,18 @@ async function loadData() {
         // Display location status
         document.getElementById('status-location').textContent = `Status: ${statusLocation}`;
         // Display status updated time
-        document.getElementById('status-updated').textContent = `Updated: ${statusUpdated}`;
+        document.getElementById('status-updated').textContent = `Updated: ${formattedStatusUpdated}`;
+        // Display today excursions
+        document.getElementById('excursions-today').textContent = `Excursions today: ${excursionsToday}`;
+        // Display total time outside today
+        document.getElementById('time-outside-today').textContent = `Time outside today: ${timeOutsideToday}`;
+
 
         const tbody = document.getElementById('table-body');
         tbody.innerHTML = '';
 
         observations.forEach(row => {
-            const timestamp = Number(row.timestamp);
-            let formattedDate = '';
-            if (!isNaN(timestamp)) {
-                const date = new Date(timestamp);
-                formattedDate = date.toLocaleString();
-            } else {
-                console.warn('Invalid timestamp:', row.timestamp);
-            }
+            const formattedDate = formatTimestamp(row.timestamp);
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
@@ -114,12 +120,26 @@ async function loadData() {
                 <td>${formattedDate}</td>
                 <td>${row.movement_direction}</td>
             `;
-
-        tbody.appendChild(tr);
-    });
+            tbody.appendChild(tr);
+        });
     } catch (err) {
         console.error('Failed to load data', err);
     }
+}
+
+function formatTimestamp(timestamp, options = {}) {
+    const {
+        formatter = (date) => date.toLocaleString(),
+        fallback = ''
+    } = options;
+
+    const ts = Number(timestamp);
+    if (isNaN(ts)) {
+        console.warn('Invalid timestamp:', timestamp);
+        return fallback;
+    }
+
+    return formatter(new Date(ts));
 }
 
 // Update current date and time every second

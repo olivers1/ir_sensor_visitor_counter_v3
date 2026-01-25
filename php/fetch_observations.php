@@ -16,6 +16,11 @@ $sql = "
     #WHERE movement_direction = 'ENTRY' OR movement_direction = 'EXIT'
 $result = $conn->query($sql);
 
+$data = [];
+if ($result && $result->num_rows > 0) {
+    $data = $result->fetch_all(MYSQLI_ASSOC);
+}
+
 # count number of 'EXIT' and store it as number of excursions
 $countSql = "
     SELECT COUNT(*) AS excursions
@@ -30,22 +35,21 @@ if ($countResult) {
     $excursions = (int) $row['excursions'];
 }
 
-$currentStatusSql = "
+$statusNowSql = "
     SELECT timestamp, movement_direction
     FROM observations 
     WHERE movement_direction = 'ENTRY' OR movement_direction = 'EXIT'
     ORDER BY timestamp DESC 
     LIMIT 1
 ";
-$currentResult = $conn->query($currentStatusSql);
+$statusNowResult = $conn->query($statusNowSql);
 
 $statusLocation = 'Unknown'; // default value
-$statusUpdated = 'Unknown';
+$statusUpdated = null;
+if ($statusNowResult && $statusNowResult->num_rows > 0) {
+    $latestRow = $statusNowResult->fetch_assoc();
 
-if ($currentResult && $currentResult->num_rows > 0) {
-    $latestRow = $currentResult->fetch_assoc();
-
-    // Determine current location
+    // Determine status location
     $direction = strtoupper(trim($latestRow['movement_direction']));
     if ($direction === 'EXIT') {
         $statusLocation = 'Outside';
@@ -53,27 +57,60 @@ if ($currentResult && $currentResult->num_rows > 0) {
         $statusLocation = 'Inside';
     }
 
-    // Store latest timestamp
-    $latestTimestamp = $latestRow['timestamp'];
+    $statusUpdated = (int) $latestRow['timestamp'];
+}
 
-    // Convert timestamp to date/time
-    // Assuming your timestamp is in milliseconds
-    if (is_numeric($latestTimestamp)) {
-        $seconds = (int)($latestTimestamp / 1000); // convert ms to seconds
-        $statusUpdated = date('Y-m-d H:i:s', $seconds); // human-readable date/time
-    } else {
-        $statusUpdated = $latestTimestamp; // fallback in case it's already a string
+$statusTodaySql = "
+    SELECT timestamp, movement_direction
+    FROM observations
+    WHERE timestamp / 1000 >= UNIX_TIMESTAMP(CURDATE())
+      AND timestamp / 1000 < UNIX_TIMESTAMP(CURDATE() + INTERVAL 1 DAY)
+";
+$statusTodayResult = $conn->query($statusTodaySql);
+
+$statusToday = [];
+$excursionsToday = 0;
+$timeOutsideToday = 0;
+$statusToday = [];
+$excursionsToday = 0;
+$timeOutsideToday = 0;
+
+$lastExitTimestamp = null;
+$nowMs = round(microtime(true) * 1000);
+
+if ($statusTodayResult && $statusTodayResult->num_rows > 0) {
+    $statusToday = $statusTodayResult->fetch_all(MYSQLI_ASSOC);
+
+    foreach ($statusToday as $row) {
+        $direction = strtoupper(trim($row['movement_direction']));
+        $timestamp = (int) $row['timestamp'];
+
+        if ($direction === 'EXIT') {
+            $excursionsToday++;
+            $lastExitTimestamp = $timestamp;
+        }
+
+        if ($direction === 'ENTRY' && $lastExitTimestamp !== null) {
+            $timeOutsideToday += ($timestamp - $lastExitTimestamp);
+            $lastExitTimestamp = null;
+        }
+    }
+
+    // Still outside at end of day → count until now
+    if ($lastExitTimestamp !== null) {
+        $timeOutsideToday += ($nowMs - $lastExitTimestamp);
     }
 }
 
+$timeOutsideToday = msToHMS($timeOutsideToday);
 
+function msToHMS($ms) {
+    $seconds = floor($ms / 1000);
+    $hours = floor($seconds / 3600);
+    $minutes = floor(($seconds % 3600) / 60);
+    $seconds = $seconds % 60;
 
-
-
-$data = [];
-
-if ($result && $result->num_rows > 0) {
-    $data = $result->fetch_all(MYSQLI_ASSOC);
+    return sprintf("%02d:%02d:%02d", $hours, $minutes, $seconds);
 }
 
 $conn->close();
@@ -83,5 +120,7 @@ echo json_encode([
     'excursions' => $excursions,
     'observations' => $data,
     'statusLocation' => $statusLocation,
-    'statusUpdated' => $statusUpdated
+    'statusUpdated' => $statusUpdated,
+    'excursionsToday' => $excursionsToday,
+    'timeOutsideToday' => $timeOutsideToday
 ]);
