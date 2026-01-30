@@ -220,14 +220,18 @@ class TrigEvaluationManager:
         self.previous_state = AppLoggingState.INIT  # keeps track of the previous app logging state
         self.log_start_index = 0     # index at sensor_log_sample_array when logging is started
         self.log_stop_index = 0      # index at sensor_log_sample_array when logging is stopped
+        self.log_stop_index_part1 = 0
+        self.log_start_index_part2 = 0
         self.log_started_timeout = 5    
         self.log_finished_timeout = 5   # timeout in seconds (before stopping logging and evaluate trig result) after logging has started and sensor state is NO_TRIG
         self.countdown_timers = {
             SensorsState.EXACTLY_ONE_TRIG: CountdownTimer(self.log_started_timeout),  # timeout if only one sensor triggers
             SensorsState.NO_TRIG: CountdownTimer(self.log_finished_timeout), # timeout before evaluate logs after sensors all sensors are unblocked (NO_TRIG)
         }
-        self.sensor_trig_arrays = []
-        self.sensor_mean_values = []
+        self.sensor_trig_arrays_part1 = []
+        self.sensor_trig_arrays_part2 = []
+        self.sensor_mean_values_part1 = []
+        self.sensor_mean_values_part2 = []
         self.first_trig_sensor_id = None    # stores and in value referring to sensor_id of the sensor that trigged first
         self.latest_trig_timestamp = 0      # the latest/highest timestamp of any of the sensors that trigged
         self.identified_movement_direction = []
@@ -392,7 +396,7 @@ class TrigEvaluationManager:
             self.capture_start_stop_index(SetLogIndex.STOP)     # set log stop index
 
         elif new_state == AppLoggingState.LOG_EVALUATION:
-            self.evaluate_logs(self.log_start_index, self.log_stop_index)
+            self.evaluate_logs()
             
     def capture_start_stop_index(self, action):
         # capture sample index when app logging is set to start and stop respectively
@@ -402,19 +406,59 @@ class TrigEvaluationManager:
         elif action == SetLogIndex.STOP:
             self.log_stop_index = self.next_index_counter
             logging.info("log_stop_index: %d", self.log_stop_index)
-
-    def evaluate_logs(self, start_index, stop_index):
-        self.sensor_trig_arrays = []    # clear list to avoid list growth
-        self.sensor_mean_values = []    # clear list to avoid list growth
+    
+    def _get_last_dubble_trig_index(self):
+        sample_index = self.log_stop_index
+        # start from log_stop_index, loop through index backwards from highest index to capture last index where both sensors were trigged at the same time
+        for sample_index in range(self.log_stop_index, self.log_start_index, -1): 
+            if all(self.sensor_handler.get_log_sample(sensor_id, sample_index).trig_state == SensorTrigState.TRIG
+                for sensor_id in range(self.number_of_sensors)):
         
+                # store index for the mean value computation
+                self.log_start_index_part2 = sample_index
+                self.log_stop_index_part1 = sample_index - 1
+                return  # break the loop and exit the function
+
+    def evaluate_logs(self):
         # extract sensor trigs and store in a list containing the trigs as sublists for each sensor
-        self._extract_sensor_trigs(start_index, stop_index)
-        self._compute_sensor_means()
+        self._get_last_dubble_trig_index()
+        
+        self.sensor_trig_arrays_part1 = self._extract_sensor_trigs(self.log_start_index, self.log_stop_index_part1)
+        self.sensor_trig_arrays_part2 = self._extract_sensor_trigs(self.log_start_index_part2, self.log_stop_index)
+        
+        self.sensor_mean_values_part1 = self._compute_sensor_means(self.sensor_trig_arrays_part1)
+        self.sensor_mean_values_part2 = self._compute_sensor_means(self.sensor_trig_arrays_part2)
+
+        # print all conditions required for valid movement direction
+        logging.info("all sensors trigged simultaniously minimum once: %s", self.all_sensors_trigged_simultaniously)
+        logging.info("first trig sensor id: %s", self.first_trig_sensor_id)
+
+        logging.info("sensor_mean_values_part1:")
+        for sensor_id, mean in enumerate(self.sensor_mean_values_part1):
+            logging.info("sensor%d mean timestamp: %.3f", sensor_id, mean)
+
+        logging.debug("sensor_trig_arrays_part1:")
+        for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays_part1):
+            logging.debug("sensor%d trig timestamps:", sensor_id)
+            for sample in sensor_samples:
+                logging.debug("%s | %d", sample.trig_state.name, sample.timestamp)
+        
+        logging.info("sensor_mean_values_part2:")
+        for sensor_id, mean in enumerate(self.sensor_mean_values_part2):
+            logging.info("sensor%d mean timestamp: %.3f", sensor_id, mean)
+
+        logging.debug("sensor_trig_arrays_part2:")
+        for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays_part2):
+            logging.debug("sensor%d trig timestamps:", sensor_id)
+            for sample in sensor_samples:
+                logging.debug("%s | %d", sample.trig_state.name, sample.timestamp)
+
         self._detect_movement_direction()
         self._write_to_database()
 
-    def _compute_sensor_means(self):
-        for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays):
+    def _compute_sensor_means(self, sensor_trig_arrays):
+        sensor_mean_values = []
+        for sensor_id, sensor_samples in enumerate(sensor_trig_arrays):
             sum = 0
             counter = 0
             mean_value = 0
@@ -429,20 +473,13 @@ class TrigEvaluationManager:
                 mean_value = sum / counter
             else:
                 None
-            # store sensor trig mean value for each sensor, sensor_id is represented of index position in list
-            self.sensor_mean_values.append(mean_value)
-    
-        print("sensor_trig_arrays:")
-        for sensor_id, sensor_samples in enumerate(self.sensor_trig_arrays):
-            logging.debug("sensor %d trig timestamps:", sensor_id)
-            #print(f"sensor_id {sensor_id}")
-            for sample in sensor_samples:
-                logging.debug("%s | %d", sample.trig_state.name, sample.timestamp)
+            # store sensor trig mean value for each sensor, sensor_id is represented by the index position in the list
+            sensor_mean_values.append(mean_value)
 
-        for sensor_id, mean in enumerate(self.sensor_mean_values):
-            logging.info("sensor%d mean timestamp: %.3f", sensor_id, mean)
+        return sensor_mean_values
 
     def _extract_sensor_trigs(self, start_index, stop_index):
+        sensor_trig_arrays = []
         for sensor_id, sensor in enumerate(self.sensors):
             sensor_trigs = []
             for index in range(start_index, stop_index):
@@ -450,9 +487,10 @@ class TrigEvaluationManager:
                 if sample.trig_state == SensorTrigState.TRIG:
                     sensor_trigs.append(sample)
 
-            self.sensor_trig_arrays.append(sensor_trigs)    # store trigs for each sensor_id 
+            sensor_trig_arrays.append(sensor_trigs)    # store the trig list for each sensor at list index in sensor_trig_arrayssensor_id that represent the sensor id (sensor0 array at index 0 etc.)
+        return sensor_trig_arrays
 
-
+    
     def _detect_movement_direction(self):
         """
         Determines ENTRY / EXIT / INVALID based on sensor mean timestamps and if both sensors were trigged during logging state
@@ -460,20 +498,21 @@ class TrigEvaluationManager:
         """
         self.identified_movement_direction.append(self.latest_trig_timestamp)   # add latest verified_sensor_trig timestamp
         # sanity checks
-        if len(self.sensor_mean_values) != 2:
+        if len(self.sensor_mean_values_part1) != 2 or len(self.sensor_mean_values_part2) != 2:
             self.identified_movement_direction.append(MovementDirection.INVALID)
             logging.warning("%s: invalid sensor count", self.identified_movement_direction)
             return self.identified_movement_direction
 
-        t0, t1 = self.sensor_mean_values    # fetch mean value for each of the sensors
+        t0, t1 = self.sensor_mean_values_part1  # fetch mean value for each of the sensors in part1
+        t2, t3 = self.sensor_mean_values_part2  # fetch mean value for each of the sensors in part2
         # If one or both sensors never trigged (mean value == 0)
-        if t0 == 0 or t1 == 0:
+        if t0 == 0 or t1 == 0 or t2 == 0 or t3 == 0:
             self.identified_movement_direction.append(MovementDirection.INVALID)
             logging.info("%s: one or both sensors never trigged", self.identified_movement_direction)
             return self.identified_movement_direction
         
         # Same timestamp → ambiguous
-        if abs(t0 - t1) < 1e-6:
+        if abs(t0 - t1) < 1e-6 or abs(t2 - t3) < 1e-6:
             self.identified_movement_direction.append(MovementDirection.INVALID)
             logging.info("%s: sensor mean values indicates sensors were trigged at same time", self.identified_movement_direction)
             return self.identified_movement_direction
@@ -485,7 +524,7 @@ class TrigEvaluationManager:
             return self.identified_movement_direction
 
         # direction determination
-        if t0 < t1:
+        if t0 < t1 and t2 < t3:
             expected_first = 0
             direction = MovementDirection.EXIT
         else:
@@ -495,12 +534,62 @@ class TrigEvaluationManager:
         # check which sensor that trigged first during logging state
         if self.first_trig_sensor_id != expected_first:
             self.identified_movement_direction.append(MovementDirection.INVALID)
-            logging.info("%s: direction mismatch, order of senors mean values does not match the first trigged sensor", self.identified_movement_direction)
+            logging.info("%s: direction mismatch, order of sensors mean values does not match the first trigged sensor", self.identified_movement_direction)
         else:
             self.identified_movement_direction.append(direction)
             logging.info("%s: detected movement direction", self.identified_movement_direction)
         
         return self.identified_movement_direction
+
+
+    # def _detect_movement_direction(self):
+    #     """
+    #     Determines ENTRY / EXIT / INVALID based on sensor mean timestamps and if both sensors were trigged during logging state
+    #     Assumes exactly 2 sensors.
+    #     """
+    #     self.identified_movement_direction.append(self.latest_trig_timestamp)   # add latest verified_sensor_trig timestamp
+    #     # sanity checks
+    #     if len(self.sensor_mean_values) != 2:
+    #         self.identified_movement_direction.append(MovementDirection.INVALID)
+    #         logging.warning("%s: invalid sensor count", self.identified_movement_direction)
+    #         return self.identified_movement_direction
+
+    #     t0, t1 = self.sensor_mean_values    # fetch mean value for each of the sensors
+    #     # If one or both sensors never trigged (mean value == 0)
+    #     if t0 == 0 or t1 == 0:
+    #         self.identified_movement_direction.append(MovementDirection.INVALID)
+    #         logging.info("%s: one or both sensors never trigged", self.identified_movement_direction)
+    #         return self.identified_movement_direction
+        
+    #     # Same timestamp → ambiguous
+    #     if abs(t0 - t1) < 1e-6:
+    #         self.identified_movement_direction.append(MovementDirection.INVALID)
+    #         logging.info("%s: sensor mean values indicates sensors were trigged at same time", self.identified_movement_direction)
+    #         return self.identified_movement_direction
+        
+    #     # verify that all sensors were trigged at the same time, anytime during logging (overlapping sensor trig)
+    #     if self.all_sensors_trigged_simultaniously == False:
+    #         self.identified_movement_direction.append(MovementDirection.INVALID)
+    #         logging.info("%s: sensors were never trigged at same time, anytime during logging", self.identified_movement_direction)
+    #         return self.identified_movement_direction
+
+    #     # direction determination
+    #     if t0 < t1:
+    #         expected_first = 0
+    #         direction = MovementDirection.EXIT
+    #     else:
+    #         expected_first = 1
+    #         direction = MovementDirection.ENTRY
+        
+    #     # check which sensor that trigged first during logging state
+    #     if self.first_trig_sensor_id != expected_first:
+    #         self.identified_movement_direction.append(MovementDirection.INVALID)
+    #         logging.info("%s: direction mismatch, order of senors mean values does not match the first trigged sensor", self.identified_movement_direction)
+    #     else:
+    #         self.identified_movement_direction.append(direction)
+    #         logging.info("%s: detected movement direction", self.identified_movement_direction)
+        
+    #     return self.identified_movement_direction
     
     def _write_to_database(self):
         # Connect to MariaDB Platform
@@ -547,8 +636,10 @@ class TrigEvaluationManager:
         self.log_stop_index = 0
 
         # clear evaluation results
-        self.sensor_trig_arrays = []
-        self.sensor_mean_values = []
+        self.sensor_trig_arrays_part1 = []
+        self.sensor_trig_arrays_part2 = []
+        self.sensor_mean_values_part1 = []
+        self.sensor_mean_values_part2 = []
         self.identified_movement_direction = []
 
         # reset verified trig states
