@@ -25,15 +25,15 @@ cs = digitalio.DigitalInOut(board.D8)   # create the cs (chip select)
 mcp = MCP.MCP3008(spi, cs)  # create the mcp object
 
 # setup logging to files
-filename_debug = "debug.log"
-filename_info = "info.log"
+filename_debug = "/var/log/cat_observer_app/debug.log"
+filename_info = "/var/log/cat_observer_app/info.log"
 # logging handlers
 console = logging.StreamHandler()
 console.setLevel(logging.INFO)     # set the log level which is printed to terminal output
 
 #file_handler_debug = logging.FileHandler(filename_debug, mode='w', encoding='utf-8')
 file_handler_debug = RotatingFileHandler(
-    "debug.log",
+    filename_debug,
     mode="w",              # overwrite after rotation
     maxBytes= 5 * 1024 * 1024,  # 5 MB
     backupCount=5,         # keep 5 old file
