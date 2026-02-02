@@ -25,8 +25,8 @@ cs = digitalio.DigitalInOut(board.D8)   # create the cs (chip select)
 mcp = MCP.MCP3008(spi, cs)  # create the mcp object
 
 # setup logging to files
-filename_debug = "/var/log/cat_observer_app/debug.log"
-filename_info = "/var/log/cat_observer_app/info.log"
+filename_debug = "/var/log/cat_observer_app/debug.log"  #"debug.log"
+filename_info = "/var/log/cat_observer_app/info.log"    #"info.log"
 # logging handlers
 console = logging.StreamHandler()
 console.setLevel(logging.INFO)     # set the log level which is printed to terminal output
@@ -283,7 +283,7 @@ class TrigEvaluationManager:
                 self.verified_sensor_trig_state.append(self.sensor_handler.consecutive_trigs_array[sensor_id][0].trig_state)
             elif is_stable == False:
                 self.verified_sensor_trig_state.append(SensorTrigState.UNKNOWN) 
-        logging.debug("verified_sensor_trig_state: %s", [sensor_id.name for sensor_id in self.prev_verified_sensor_trig_state])
+        logging.debug("verified_sensor_trig_state: %s", [sensor_id.name for sensor_id in self.verified_sensor_trig_state])
         new_state = self.verified_sensor_trig_state
 
         if new_state != self.prev_verified_sensor_trig_state:
@@ -396,7 +396,10 @@ class TrigEvaluationManager:
             self.capture_start_stop_index(SetLogIndex.STOP)     # set log stop index
 
         elif new_state == AppLoggingState.LOG_EVALUATION:
-            self.evaluate_logs()
+            try:
+                self.evaluate_logs()
+            finally:
+                return
             
     def capture_start_stop_index(self, action):
         # capture sample index when app logging is set to start and stop respectively
@@ -407,7 +410,7 @@ class TrigEvaluationManager:
             self.log_stop_index = self.next_index_counter
             logging.info("log_stop_index: %d", self.log_stop_index)
     
-    def _get_last_dubble_trig_index(self):
+    def _get_last_double_trig_index(self):
         sample_index = self.log_stop_index
         # start from log_stop_index, loop through index backwards from highest index to capture last index where both sensors were trigged at the same time
         for sample_index in range(self.log_stop_index, self.log_start_index, -1): 
@@ -417,12 +420,19 @@ class TrigEvaluationManager:
                 # store index for the mean value computation
                 self.log_start_index_part2 = sample_index
                 self.log_stop_index_part1 = sample_index - 1
-                return  # break the loop and exit the function
+                return True     # a "double trig" at a specific index was found, break the loop and exit the function
+        
+        return False    # no index with "double trig" was found
 
     def evaluate_logs(self):
-        # extract sensor trigs and store in a list containing the trigs as sublists for each sensor
-        self._get_last_dubble_trig_index()
+        # capture last index where both sensors were trigged at the same time
+        double_trig = self._get_last_double_trig_index()
+        if double_trig == True:
+            logging.debug("a double trig found at index: %d", self.log_start_index_part2)
+        else:
+            logging.debug("no double trig found")
         
+        # extract sensor trigs and store in a list containing the trigs as sublists for each sensor
         self.sensor_trig_arrays_part1 = self._extract_sensor_trigs(self.log_start_index, self.log_stop_index_part1)
         self.sensor_trig_arrays_part2 = self._extract_sensor_trigs(self.log_start_index_part2, self.log_stop_index)
         
@@ -459,18 +469,18 @@ class TrigEvaluationManager:
     def _compute_sensor_means(self, sensor_trig_arrays):
         sensor_mean_values = []
         for sensor_id, sensor_samples in enumerate(sensor_trig_arrays):
-            sum = 0
+            total = 0
             counter = 0
             mean_value = 0
             for sample in sensor_samples:
-                sum += sample.timestamp 
+                total += sample.timestamp 
                 counter += 1
                 # extract the latest trig timestamp
                 if sample.timestamp > self.latest_trig_timestamp:
                     self.latest_trig_timestamp = sample.timestamp
             # calculate timestamp mean value for each sensor
             if counter > 0:
-                mean_value = sum / counter
+                mean_value = total / counter
             else:
                 None
             # store sensor trig mean value for each sensor, sensor_id is represented by the index position in the list
@@ -540,69 +550,21 @@ class TrigEvaluationManager:
             logging.info("%s: detected movement direction", self.identified_movement_direction)
         
         return self.identified_movement_direction
-
-
-    # def _detect_movement_direction(self):
-    #     """
-    #     Determines ENTRY / EXIT / INVALID based on sensor mean timestamps and if both sensors were trigged during logging state
-    #     Assumes exactly 2 sensors.
-    #     """
-    #     self.identified_movement_direction.append(self.latest_trig_timestamp)   # add latest verified_sensor_trig timestamp
-    #     # sanity checks
-    #     if len(self.sensor_mean_values) != 2:
-    #         self.identified_movement_direction.append(MovementDirection.INVALID)
-    #         logging.warning("%s: invalid sensor count", self.identified_movement_direction)
-    #         return self.identified_movement_direction
-
-    #     t0, t1 = self.sensor_mean_values    # fetch mean value for each of the sensors
-    #     # If one or both sensors never trigged (mean value == 0)
-    #     if t0 == 0 or t1 == 0:
-    #         self.identified_movement_direction.append(MovementDirection.INVALID)
-    #         logging.info("%s: one or both sensors never trigged", self.identified_movement_direction)
-    #         return self.identified_movement_direction
-        
-    #     # Same timestamp → ambiguous
-    #     if abs(t0 - t1) < 1e-6:
-    #         self.identified_movement_direction.append(MovementDirection.INVALID)
-    #         logging.info("%s: sensor mean values indicates sensors were trigged at same time", self.identified_movement_direction)
-    #         return self.identified_movement_direction
-        
-    #     # verify that all sensors were trigged at the same time, anytime during logging (overlapping sensor trig)
-    #     if self.all_sensors_trigged_simultaniously == False:
-    #         self.identified_movement_direction.append(MovementDirection.INVALID)
-    #         logging.info("%s: sensors were never trigged at same time, anytime during logging", self.identified_movement_direction)
-    #         return self.identified_movement_direction
-
-    #     # direction determination
-    #     if t0 < t1:
-    #         expected_first = 0
-    #         direction = MovementDirection.EXIT
-    #     else:
-    #         expected_first = 1
-    #         direction = MovementDirection.ENTRY
-        
-    #     # check which sensor that trigged first during logging state
-    #     if self.first_trig_sensor_id != expected_first:
-    #         self.identified_movement_direction.append(MovementDirection.INVALID)
-    #         logging.info("%s: direction mismatch, order of senors mean values does not match the first trigged sensor", self.identified_movement_direction)
-    #     else:
-    #         self.identified_movement_direction.append(direction)
-    #         logging.info("%s: detected movement direction", self.identified_movement_direction)
-        
-    #     return self.identified_movement_direction
     
     def _write_to_database(self):
         # Connect to MariaDB Platform
+        logging.info("DB: connecting…")
         try:
             conn = mariadb.connect(
                 user=db_user,
                 password=db_password,
                 host="localhost",
                 port=3306,
-                database=db_name
+                database=db_name,
+                connect_timeout=2
             )
         except mariadb.Error as e:
-            logging.error("error connecting to MariaDB platform. %s", e)
+            logging.error("DB: connection failed %s", e)
             sys.exit(1)
 
         # Get Cursor
@@ -613,10 +575,11 @@ class TrigEvaluationManager:
             "INSERT INTO observations (timestamp, movement_direction) VALUES (?, ?)",
             (self.identified_movement_direction[0], self.identified_movement_direction[1].name))
         conn.commit()
-        logging.info("identified movement direction successfully stored in mysql database")
+        logging.info("DB: connected, executing insert of identified movement direction")
 
         # Close Connection
         conn.close()
+        logging.info("DB: connection cloded")
 
     def clear_log_memory(self):
         # reset sensor handler buffers
@@ -634,6 +597,8 @@ class TrigEvaluationManager:
         # reset indices
         self.log_start_index = 0
         self.log_stop_index = 0
+        self.log_stop_index_part1 = 0
+        self.log_start_index_part2 = 0
 
         # clear evaluation results
         self.sensor_trig_arrays_part1 = []
@@ -644,6 +609,7 @@ class TrigEvaluationManager:
 
         # reset verified trig states
         self.verified_sensor_trig_state = [SensorTrigState.UNKNOWN for _ in range(self.number_of_sensors)]
+        self.prev_verified_sensor_trig_state = [SensorTrigState.UNKNOWN for _ in range(self.number_of_sensors)]
 
         # cancel timers
         for timer in self.countdown_timers.values():
