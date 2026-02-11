@@ -87,7 +87,7 @@ async function loadData() {
 
         const observations = data.observations;
         const excursions = data.excursions;
-        const statusLocation = data.statusLocation;
+        const locationStatus = data.locationStatus;
         const statusUpdated = data.statusUpdated;
         const formattedStatusUpdated = formatTimestamp(statusUpdated, {
             fallback: 'Unknown'
@@ -99,7 +99,7 @@ async function loadData() {
         document.getElementById('excursions-count').textContent = `Total excursions: ${excursions}`;
 
         // Display location status
-        document.getElementById('status-location').textContent = `Status: ${statusLocation}`;
+        document.getElementById('status-location').textContent = `Status: ${locationStatus}`;
         // Display status updated time
         document.getElementById('status-updated').textContent = `Updated: ${formattedStatusUpdated}`;
         // Display today excursions
