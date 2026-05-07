@@ -72,6 +72,8 @@ $resultToday = $conn->query($queryToday);
 $rowsToday = [];
 $excursionsToday = 0;
 $timeOutsideToday = 0;
+$longestTimeOutsideToday = 0;
+$shortestTimeOutsideToday = null;
 
 $lastExitTimestamp = null;
 $nowMs = round(microtime(true) * 1000);
@@ -89,8 +91,23 @@ if ($resultToday && $resultToday->num_rows > 0) {
         }
 
         if ($direction === 'ENTRY' && $lastExitTimestamp !== null) {
-            $timeOutsideToday += ($timestamp - $lastExitTimestamp);
+            $duration += ($timestamp - $lastExitTimestamp);
+
+            if ($duration > 0) {
+                $timeOutsideToday += $duration;
+
+                # track longest time outside
+                if ($duration > $longestTimeOutsideToday) {
+                    $longestTimeOutsideToday = $duration;
+                }
+
+                # track shortest time outside
+                if ($shortestTimeOutsideToday === null || $duration < $shortestTimeOutsideToday) {
+                    $shortestTimeOutsideToday = $duration;
+                }
+
             $lastExitTimestamp = null;
+            }
         }
     }
 
@@ -101,6 +118,12 @@ if ($resultToday && $resultToday->num_rows > 0) {
 }
 
 $timeOutsideToday = msToHMS($timeOutsideToday);
+$longestTimeOutsideToday = msToHMS($longestTimeOutsideToday);
+if ($shortestTimeOutsideToday !== null) {
+    $shortestTimeOutsideToday = msToHMS($shortestTimeOutsideToday);
+} else {
+    $shortestTimeOutsideToday = "00:00:00";
+}
 
 function msToHMS($ms) {
     $seconds = floor($ms / 1000);
@@ -120,5 +143,7 @@ echo json_encode([
     'locationStatus' => $locationStatus,
     'statusUpdated' => $statusUpdated,
     'excursionsToday' => $excursionsToday,
-    'timeOutsideToday' => $timeOutsideToday
+    'timeOutsideToday' => $timeOutsideToday,
+    'longestTimeOutsideToday' => $longestTimeOutsideToday,
+    'shortestTimeOutsideToday' => $shortestTimeOutsideToday
 ]);

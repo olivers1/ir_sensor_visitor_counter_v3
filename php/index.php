@@ -94,10 +94,11 @@ async function loadData() {
         });
         const excursionsToday = data.excursionsToday;
         const timeOutsideToday = data.timeOutsideToday;
+        const longestTimeOutsideToday = data.longestTimeOutsideToday;
+        const shortestTimeOutsideToday = data.shortestTimeOutsideToday;
 
         // Display excursions count
         document.getElementById('excursions-count').textContent = `Total excursions: ${excursions}`;
-
         // Display location status
         document.getElementById('status-location').textContent = `Status: ${locationStatus}`;
         // Display status updated time
